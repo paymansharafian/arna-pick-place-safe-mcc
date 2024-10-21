@@ -1,0 +1,2 @@
+ros_kortex/kortex_move_it_config/kortex_move_it_config
+/home/legion-arna/ros/devel/.private/kortex_move_it_config/cmake.lock /home/legion-arna/ros/devel/./cmake.lock

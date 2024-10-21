@@ -1,0 +1,5 @@
+ros_kortex/kortex_description
+/home/legion-arna/ros/devel/.private/kortex_description/cmake.lock /home/legion-arna/ros/devel/./cmake.lock
+/home/legion-arna/ros/devel/.private/kortex_description/lib/pkgconfig/kortex_description.pc /home/legion-arna/ros/devel/lib/pkgconfig/kortex_description.pc
+/home/legion-arna/ros/devel/.private/kortex_description/share/kortex_description/cmake/kortex_descriptionConfig.cmake /home/legion-arna/ros/devel/share/kortex_description/cmake/kortex_descriptionConfig.cmake
+/home/legion-arna/ros/devel/.private/kortex_description/share/kortex_description/cmake/kortex_descriptionConfig-version.cmake /home/legion-arna/ros/devel/share/kortex_description/cmake/kortex_descriptionConfig-version.cmake
