@@ -50,7 +50,6 @@ def compute_surface_normals(depth_image, kernel_size=5):
     
     return normals_rgb, normals
 
-
 def get_mask_point(mask: np.ndarray, depth_image: np.ndarray, color_info: CameraInfo) -> Optional[Tuple[float, float, float]]:
     """
     Calculate the point at the most prominent depth of the mask.

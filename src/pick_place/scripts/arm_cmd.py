@@ -4,17 +4,21 @@ import actionlib.goal_id_generator
 from kortex_driver.msg import FollowCartesianTrajectoryAction, FollowCartesianTrajectoryActionGoal, FollowCartesianTrajectoryGoal, CartesianWaypoint, Pose as CartesianPose
 from kortex_driver.msg import Gripper, Finger, GripperCommand
 from kortex_driver.srv import SendGripperCommand
+from kortex_driver.msg import Action, ActionHandle, Action_action_parameters, ConstrainedJointAngles, JointAngles, JointAngle
+from kortex_driver.srv import ExecuteAction, ExecuteActionRequest
+
 import rospy
 import actionlib
 
 from transform import *
 
 # wait for service to be ready
-rospy.wait_for_service('my_gen3/base/send_gripper_command')
-
+execute_action = rospy.ServiceProxy('my_gen3/base/execute_action', ExecuteAction)
+execute_action.wait_for_service()
 trajectory_action = actionlib.SimpleActionClient('/my_gen3/cartesian_trajectory_controller/follow_cartesian_trajectory', FollowCartesianTrajectoryAction)
 trajectory_action.wait_for_server()
 grip_srv = rospy.ServiceProxy('my_gen3/base/send_gripper_command', SendGripperCommand)
+grip_srv.wait_for_service()
 
 print("Created services")
 
@@ -62,3 +66,53 @@ def arm_set_rotation(rotation: Point3D):
 
 def grip(amount):
     grip_srv(GripperCommand(3, Gripper([Finger(0, amount)]), 0))
+
+
+def arm_home():
+    # Create the action message
+    action = Action()
+    
+    # Set up the action handle
+    action.handle = ActionHandle()
+    action.handle.identifier = 2
+    action.handle.action_type = 7
+    action.handle.permission = 1
+    
+    # Set the action name and application data
+    action.name = "Home"
+    action.application_data = ""
+    
+    # Create the joint angles message
+    joint_angles = JointAngles()
+    angles = [
+        (0, 0.0),
+        (1, 15.0),
+        (2, 180.0),
+        (3, 230.0),
+        (4, 0.0),
+        (5, 55.0),
+        (6, 90.0)
+    ]
+    
+    # Add each joint angle to the message
+    for joint_id, value in angles:
+        joint_angle = JointAngle()
+        joint_angle.joint_identifier = joint_id
+        joint_angle.value = value
+        joint_angles.joint_angles.append(joint_angle)
+    
+    # Create the constrained joint angles message
+    constrained_joint_angles = ConstrainedJointAngles()
+    constrained_joint_angles.joint_angles = joint_angles
+    constrained_joint_angles.constraint.type = 0
+    constrained_joint_angles.constraint.value = 0.0
+    
+    # Set up the action parameters
+    action.oneof_action_parameters = Action_action_parameters()
+    action.oneof_action_parameters.reach_joint_angles.append(constrained_joint_angles)
+    
+    # Create and send the service request
+    req = ExecuteActionRequest()
+    req.input = action
+    
+    execute_action(req)
