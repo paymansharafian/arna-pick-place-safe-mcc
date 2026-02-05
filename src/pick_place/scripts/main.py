@@ -86,12 +86,6 @@ def execute_pick():
     arm_set_position(aligned_position)
     print("aligned camera")
 
-    # resegment at center of image
-    mouse_click_point = get_frame_center()
-    mask = segment_image(mouse_click_point, color)
-    target = get_mask_point(mask, depth, color_info)
-    target = transform_pypoint(target, "camera_color_frame", "base_link")
-
     # get the plane at the target
     target_plane = Plane(target, normal_vector=pointing_normal)
 
@@ -111,7 +105,7 @@ def execute_pick():
     print("filled frame with object")
 
     # resegment at center of image once more
-    mask = segment_image(mouse_click_point, color)
+    mask = segment_image(get_frame_center(), color)
     target = get_mask_point(mask, depth, color_info)
     target = transform_pypoint(target, "camera_color_frame", "base_link")
 
