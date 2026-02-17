@@ -4,7 +4,7 @@ from depth_processing import *
 from segmentation import *
 from proto_pub import *
 from camera import CameraStream
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import Image, CompressedImage
 from geometry_msgs.msg import Pose, Point
 import numpy as np
 import cv2
@@ -17,6 +17,7 @@ from arm_cmd import *
 
 # output publishers
 image_pub = rospy.Publisher('pick_place_cam', Image, queue_size=10)
+image_compressed_pub = rospy.Publisher('pick_place_cam/compressed', CompressedImage, queue_size=10)
 pick_ready_pub = rospy.Publisher('pick_ready', Bool, queue_size=10)
 
 window_name = 'Pick Place'
@@ -156,6 +157,17 @@ def frame_cb(_color, _depth, _color_info, _depth_info):
 
     cv2.imshow(window_name, annotated)
     image_pub.publish(cam.bridge.cv2_to_imgmsg(annotated, encoding="bgr8"))
+
+
+    # resize annotated image by half
+    annotated = cv2.resize(annotated, (0, 0), fx=0.5, fy=0.5)
+
+    # Publish compressed version for WebSocket streaming
+    compressed_msg = CompressedImage()
+    compressed_msg.header.stamp = rospy.Time.now()
+    compressed_msg.format = "jpeg"
+    compressed_msg.data = np.array(cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 30])[1]).tobytes()
+    image_compressed_pub.publish(compressed_msg)
     cv2.setMouseCallback(window_name, mouse_cb)
 
     key_code = cv2.waitKey(1)
@@ -189,11 +201,15 @@ def click_point_cb(msg: Point):
     print(msg)
     if msg.x < 0 or msg.y < 0:
         return
-    
-    if (msg.x >= cam.current_color_frame.shape[1] or msg.y >= cam.current_color_frame.shape[0]):
+
+    # Scale by 2x because compressed image is published at half resolution
+    click_x = int(msg.x * 2)
+    click_y = int(msg.y * 2)
+
+    if (click_x >= cam.current_color_frame.shape[1] or click_y >= cam.current_color_frame.shape[0]):
         return
 
-    mouse_click_point = (int(msg.x), int(msg.y))
+    mouse_click_point = (click_x, click_y)
     mouse_click = True
 
 # input subscribers

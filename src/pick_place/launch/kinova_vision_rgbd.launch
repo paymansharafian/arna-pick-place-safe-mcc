@@ -42,7 +42,7 @@
   <arg name="depth_rtsp_media_url" default="rtsp://$(arg device)/depth"
        doc="RTSP media URL for depth stream" />
 
-  <arg name="depth_rtsp_element_config" default="rtspsrc location=$(arg depth_rtsp_media_url) latency=30"
+  <arg name="depth_rtsp_element_config" default="rtspsrc location=$(arg depth_rtsp_media_url) latency=10"
        doc="RTSP element configuration for depth stream" />
 
   <arg name="depth_rtp_depay_element_config" default="rtpgstdepay"
@@ -52,7 +52,7 @@
   <arg name="color_rtsp_media_url" default="rtsp://$(arg device)/color"
        doc="RTSP media URL for color stream" />
 
-  <arg name="color_rtsp_element_config" default="rtspsrc location=$(arg color_rtsp_media_url) latency=30"
+  <arg name="color_rtsp_element_config" default="rtspsrc location=$(arg color_rtsp_media_url) latency=10"
        doc="RTSP element configuration for color stream" />
 
   <arg name="color_rtp_depay_element_config" default="rtph264depay"
