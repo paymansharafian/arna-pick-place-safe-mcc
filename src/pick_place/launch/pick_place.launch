@@ -5,7 +5,9 @@
     <arg name="start_rviz" value="false" />
 </include>
 <include file="$(find pick_place)/launch/kinova_vision_rgbd.launch" />
-<include file="$(find rosbridge_server)/launch/rosbridge_websocket.launch" />
+<include file="$(find rosbridge_server)/launch/rosbridge_websocket.launch">
+    <arg name="port" value="9090" />
+</include>
 
 <node pkg="web_video_server" type="web_video_server" name="web_video_server" output="screen" />
 
