@@ -36,5 +36,5 @@ def data_to_message(data):
 
 def publish(topic, message):
     if topic not in publishers:
-        publishers[topic] = rospy.Publisher(topic, message.__class__, queue_size=10)
+        publishers[topic] = rospy.Publisher(topic, message.__class__, queue_size=1)
     publishers[topic].publish(message)

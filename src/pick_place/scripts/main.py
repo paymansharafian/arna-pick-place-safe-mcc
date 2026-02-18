@@ -16,9 +16,9 @@ from transform import *
 from arm_cmd import *
 
 # output publishers
-image_pub = rospy.Publisher('pick_place_cam', Image, queue_size=10)
-image_compressed_pub = rospy.Publisher('pick_place_cam/compressed', CompressedImage, queue_size=10)
-pick_ready_pub = rospy.Publisher('pick_ready', Bool, queue_size=10)
+image_pub = rospy.Publisher('pick_place_cam', Image, queue_size=1)
+image_compressed_pub = rospy.Publisher('pick_place_cam/compressed', CompressedImage, queue_size=1)
+pick_ready_pub = rospy.Publisher('pick_ready', Bool, queue_size=1)
 
 window_name = 'Pick Place'
 
