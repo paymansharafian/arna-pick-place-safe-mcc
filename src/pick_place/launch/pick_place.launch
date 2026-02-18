@@ -9,7 +9,14 @@
     <arg name="port" value="9090" />
 </include>
 
-<node pkg="web_video_server" type="web_video_server" name="web_video_server" output="screen" />
+<!-- Second rosbridge for base camera streaming (separate WebSocket to avoid bottleneck) -->
+<node pkg="rosbridge_server" type="rosbridge_websocket" name="rosbridge_websocket_cam" output="screen">
+    <param name="port" value="9091" />
+    <param name="address" value="" />
+    <param name="unregister_timeout" value="86400" />
+</node>
+
+<!-- <node pkg="web_video_server" type="web_video_server" name="web_video_server" output="screen" /> -->
 
 <node pkg="pick_place" type="main.py" name="pick_place" output="screen" />
 
