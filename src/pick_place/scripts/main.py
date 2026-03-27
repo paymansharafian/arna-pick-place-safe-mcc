@@ -14,6 +14,21 @@ import threading
 rospy.init_node('pick_place', anonymous=True)
 from transform import *
 from arm_cmd import *
+from scipy.spatial.transform import Rotation as _Rotation
+from grasp_net import get_best_grasp, get_all_grasps, load_model
+
+# ── Grasp geometry tuning ──────────────────────────────────────────────────────
+# Contact-GraspNet was trained with a Panda gripper whose fingertips sit
+# ~8.5 cm ahead of the wrist along the approach axis.  The predicted grasp
+# position is therefore the WRIST position that places Panda fingers on the
+# object.  The Kinova Robotiq fingers are shorter, so we push the wrist
+# forward by GRASP_DEPTH_OFFSET_M to compensate.  Increase this value if
+# the arm still stops short; decrease it if it pushes too hard into the object.
+GRASP_DEPTH_OFFSET_M = 0.095   # metres – tunable
+
+# Stand-off distance for Stage-1 (pre-grasp approach).
+# Must be > GRASP_DEPTH_OFFSET_M so pre-grasp is always behind the object.
+GRASP_STANDOFF_M = 0.15       # metres – tunable
 
 # output publishers
 image_pub = rospy.Publisher('pick_place_cam', Image, queue_size=1)
@@ -57,87 +72,118 @@ def execute_pick():
 
     if executing_pick:
         return
-    
+
     executing_pick = True
     pick_ready_pub.publish(False)
 
     starting_tool_position = get_frame_position("tool_frame", "base_link")
+    starting_tool_rotation = get_frame_rotation_euler("tool_frame", "base_link")
 
-    target = get_mask_point(mask, depth, color_info)
-    target = transform_pypoint(target, "camera_color_frame", "base_link")
+    # ── 1. Get all grasp candidates from Contact-GraspNet ────────────────────
+    grasps_cam, scores_cam = get_all_grasps(mask, depth, color_info)
 
-    # vector along tool plane
-    pointing_normal = get_frame_axis("tool_frame", "base_link", axis='z')
-    tool_position = get_frame_position("tool_frame", "base_link")
+    if grasps_cam is None:
+        print('[execute_pick] No grasps found – aborting.')
+        executing_pick = False
+        return
 
-    # tool plane
-    tool_plane = Plane(tool_position, normal_vector=pointing_normal)
+    # ── 2. Get TF rotation camera_color_frame → base_link as numpy 3x3 ───────
+    tf_cam_base = transform_frames("camera_color_frame", "base_link")
+    if tf_cam_base is None:
+        print('[execute_pick] TF lookup failed – aborting.')
+        executing_pick = False
+        return
+    q = tf_cam_base.transform.rotation
+    R_cam_base = _Rotation.from_quat([q.x, q.y, q.z, q.w]).as_matrix()
 
-    # get camera position and project onto tool plane
-    cam_position = get_frame_position("camera_color_frame", "base_link")
-    camera_projected = tool_plane.projection(cam_position)
+    # ── 3. Select best grasp by confidence, filtering impossible directions ───
+    # We use pure confidence (Contact-GraspNet's own scoring) as the criterion.
+    # The 3-stage approach (position → rotate → advance) already handles large
+    # orientation changes, so there is no reason to bias toward the current tool
+    # orientation – doing so was causing systematic top-down selection.
+    #
+    # We only filter out grasps that approach from BELOW the table (+Z in
+    # base_link), which the arm physically cannot execute.
+    best_idx = None
+    for i, (g_cam, sc) in enumerate(zip(grasps_cam, scores_cam)):
+        approach_dir_base = R_cam_base @ g_cam[:3, 2]
+        # approach_dir_base[2] > 0.5 means the gripper would need to travel
+        # upward to reach the object (approaching from below) – skip these.
+        if approach_dir_base[2] > 0.5:
+            continue
+        best_idx = i
+        break  # scores are already sorted descending – first valid = best
 
-    # project target position onto tool plane
-    target_projected = tool_plane.projection(target)
+    if best_idx is None:
+        # All grasps pointed upward (very unusual) – fall back to index 0
+        best_idx = 0
+        print('[execute_pick] Warning: all grasps have upward approach, using best by score.')
 
-    # add this vector to tool frame
-    aligned_position = tool_position + (target_projected - camera_projected)
+    best_grasp = grasps_cam[best_idx]
+    approach_dir_base = R_cam_base @ best_grasp[:3, 2]
+    print(f'[execute_pick] Selected grasp idx={best_idx}  '
+          f'confidence={scores_cam[best_idx]:.3f}  '
+          f'approach_base=[{approach_dir_base[0]:.2f}, {approach_dir_base[1]:.2f}, {approach_dir_base[2]:.2f}]  '
+          f'pos_cam=[{best_grasp[0,3]:.3f}, {best_grasp[1,3]:.3f}, {best_grasp[2,3]:.3f}]')
 
-    # translate arm by this vector
-    arm_set_position(aligned_position)
-    print("aligned camera")
+    # ── 5. Transform grasp pose to base_link ──────────────────────────────────
+    target_position = transform_pypoint(
+        tuple(best_grasp[:3, 3].tolist()), "camera_color_frame", "base_link"
+    )
+    euler_cam = _Rotation.from_matrix(best_grasp[:3, :3]).as_euler('xyz')
+    target_orientation = transform_pyrotation(
+        Point3D(*euler_cam.tolist()), "camera_color_frame", "base_link"
+    )
 
-    # get the plane at the target
-    target_plane = Plane(target, normal_vector=pointing_normal)
+    if target_position is None or target_orientation is None:
+        print('[execute_pick] TF transform failed – aborting.')
+        executing_pick = False
+        return
 
-    # project the tool position onto the target plane so we can approach while keeping the object centered in the frame
-    tool_position = get_frame_position("tool_frame", "base_link")
-    tool_projected = target_plane.projection(tool_position)
+    # Pre-grasp position: GRASP_STANDOFF_M back from the corrected grasp position
+    # (approach_dir_base already computed in grasp selection step above)
+    # Final grasp position: push wrist forward to compensate for Kinova finger
+    # length being shorter than the Panda fingers the model was trained with.
+    grasp_position = Point3D(
+        float(target_position.x) + approach_dir_base[0] * GRASP_DEPTH_OFFSET_M,
+        float(target_position.y) + approach_dir_base[1] * GRASP_DEPTH_OFFSET_M,
+        float(target_position.z) + approach_dir_base[2] * GRASP_DEPTH_OFFSET_M,
+    )
+    pre_target_position = Point3D(
+        float(target_position.x) - approach_dir_base[0] * GRASP_STANDOFF_M,
+        float(target_position.y) - approach_dir_base[1] * GRASP_STANDOFF_M,
+        float(target_position.z) - approach_dir_base[2] * GRASP_STANDOFF_M,
+    )
 
-    # get the max percentage of the frame w or h that the segmented object bb takes up
-    x,y,w,h = get_mask_aabb(mask)
-    max_percent = max(w / 640, h / 480)
-
-    # get position that percentage of the way towards the projected tool position
-    intermediate_target = lerp_point(tool_position, tool_projected, (1 - max_percent))
-
-    # move until the object fills the frame
-    arm_set_position(intermediate_target)
-    print("filled frame with object")
-
-    # resegment at center of image once more
-    mask = segment_image(get_frame_center(), color)
-    target = get_mask_point(mask, depth, color_info)
-    target = transform_pypoint(target, "camera_color_frame", "base_link")
-
-    # Get the detected angle from segmentation
-    angle_rad = math.radians(get_mask_rotation(mask))
-
-    # align gripper to the target now (rather than camera)
-    tool_position = get_frame_position("tool_frame", "base_link")
-    tool_plane = Plane(tool_position, normal_vector=pointing_normal)
-    target_projected = tool_plane.projection(target)
-
-    arm_set_position(target_projected)
-    print("final aligned")
-
-    mask = None
-    mouse_click_point = None
-
-    # rotate
-    arm_rotate_tool(Point3D(0, 0, angle_rad))
-
-    # Open gripper
+    # ── 6. Open gripper ───────────────────────────────────────────────────────
     grip(0)
 
-    # move to final position
-    arm_set_position(target)
-    # Close gripper
+    # ── Stage 1: position-only pre-grasp, keep current orientation ────────────
+    # Moving position while keeping the current orientation maximises IK
+    # success because the arm only needs to solve for XYZ, not for a full
+    # reorientation at the same time.
+    arm_set_position(pre_target_position)
+    print('[execute_pick] Stage 1: pre-grasp position reached')
+
+    # ── Stage 2: rotate to grasp orientation in place ─────────────────────────
+    # Now that we are at the right spatial location the shoulder/elbow
+    # configuration is already correct and a pure wrist rotation is enough.
+    arm_set_rotation(target_orientation)
+    print('[execute_pick] Stage 2: grasp orientation set')
+
+    # ── Stage 3: advance along approach axis to final grasp position ──────────
+    arm_set_position(grasp_position)
+    print('[execute_pick] Stage 3: at grasp position')
+
+    # ── Stage 4: close gripper ────────────────────────────────────────────────
     grip(1)
 
-    # move back to starting tool position
-    arm_set_position(starting_tool_position)
+    # ── Stage 5: return to starting pose ─────────────────────────────────────
+    arm_set_pose(starting_tool_position, starting_tool_rotation)
+    print('[execute_pick] Returned to start')
 
+    mask = None
+    mouse_click_point = None   # clear the blue dot overlay on the camera feed
     executing_pick = False
 
 
@@ -191,6 +237,9 @@ def frame_cb(_color, _depth, _color_info, _depth_info):
             threading.Thread(target=execute_pick).start()
     elif mouse_click:
         mouse_click = False
+
+# Pre-load Contact-GraspNet weights onto the GPU so the first pick has no lag
+load_model()
 
 cam.add_frame_callback(frame_cb)
 
