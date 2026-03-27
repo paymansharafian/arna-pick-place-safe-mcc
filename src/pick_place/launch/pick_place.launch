@@ -9,9 +9,16 @@
     <arg name="port" value="9090" />
 </include>
 
-<!-- Second rosbridge for base camera streaming (separate WebSocket to avoid bottleneck) -->
+<!-- Dedicated rosbridge for base camera streaming -->
 <node pkg="rosbridge_server" type="rosbridge_websocket" name="rosbridge_websocket_cam" output="screen">
     <param name="port" value="9091" />
+    <param name="address" value="" />
+    <param name="unregister_timeout" value="86400" />
+</node>
+
+<!-- Dedicated rosbridge for arm camera streaming -->
+<node pkg="rosbridge_server" type="rosbridge_websocket" name="rosbridge_websocket_arm_cam" output="screen">
+    <param name="port" value="9092" />
     <param name="address" value="" />
     <param name="unregister_timeout" value="86400" />
 </node>
