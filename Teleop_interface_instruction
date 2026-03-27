@@ -1,0 +1,11 @@
+1. open terminal On Legion :
+export ROS_IP=10.0.0.101
+roslaunch pick_place pick_place.launch
+
+2. open new terminal:
+ssh blackbird.lan
+sudo -s
+cd ros/arna_ws/src/arna_teleop/src/
+./base_interface.sh
+
+
