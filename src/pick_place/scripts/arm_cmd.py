@@ -6,6 +6,7 @@ from kortex_driver.msg import Gripper, Finger, GripperCommand
 from kortex_driver.srv import SendGripperCommand
 from kortex_driver.msg import Action, ActionHandle, Action_action_parameters, ConstrainedJointAngles, JointAngles, JointAngle
 from kortex_driver.srv import ExecuteAction, ExecuteActionRequest
+from kortex_driver.srv import StopAction
 
 import rospy
 import actionlib
@@ -19,6 +20,8 @@ trajectory_action = actionlib.SimpleActionClient('/my_gen3/cartesian_trajectory_
 trajectory_action.wait_for_server()
 grip_srv = rospy.ServiceProxy('my_gen3/base/send_gripper_command', SendGripperCommand)
 grip_srv.wait_for_service()
+stop_action_srv = rospy.ServiceProxy('my_gen3/base/stop_action', StopAction)
+stop_action_srv.wait_for_service()
 
 print("Created services")
 
@@ -31,9 +34,9 @@ def arm_tool_rotation():
 def arm_set_pose(position: Point3D, orientation: Point3D):
     if (rospy.is_shutdown()):
         return
-    
+
     print("Moving arm")
-    
+
     goal = FollowCartesianTrajectoryGoal()
     goal.trajectory.append(CartesianWaypoint(CartesianPose(position.x, position.y, position.z, orientation.x, orientation.y, orientation.z), 0, 0.1, 20, 0))
     goal.use_optimal_blending = True

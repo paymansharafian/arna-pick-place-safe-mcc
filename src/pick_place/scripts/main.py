@@ -34,6 +34,7 @@ GRASP_STANDOFF_M = 0.15       # metres – tunable
 image_pub = rospy.Publisher('pick_place_cam', Image, queue_size=1)
 image_compressed_pub = rospy.Publisher('pick_place_cam/compressed', CompressedImage, queue_size=1)
 pick_ready_pub = rospy.Publisher('pick_ready', Bool, queue_size=1)
+pick_running_pub = rospy.Publisher('pick_running', Bool, queue_size=1)
 
 window_name = 'Pick Place'
 
@@ -75,6 +76,7 @@ def execute_pick():
 
     executing_pick = True
     pick_ready_pub.publish(False)
+    pick_running_pub.publish(True)
 
     starting_tool_position = get_frame_position("tool_frame", "base_link")
     starting_tool_rotation = get_frame_rotation_euler("tool_frame", "base_link")
@@ -184,6 +186,7 @@ def execute_pick():
 
     mask = None
     mouse_click_point = None   # clear the blue dot overlay on the camera feed
+    pick_running_pub.publish(False)
     executing_pick = False
 
 

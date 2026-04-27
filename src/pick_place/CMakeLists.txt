@@ -12,6 +12,17 @@ find_package(catkin REQUIRED COMPONENTS
   std_msgs
   cv_bridge
   image_transport
+  message_generation
+)
+
+add_message_files(
+  FILES
+  NetworkQuality.msg
+)
+
+generate_messages(
+  DEPENDENCIES
+  std_msgs
 )
 
 catkin_package(CATKIN_DEPENDS
@@ -21,6 +32,7 @@ catkin_package(CATKIN_DEPENDS
   std_msgs
   cv_bridge
   image_transport
+  message_runtime
 )
 
 find_package(OpenCV)
