@@ -1,0 +1,6 @@
+float64 rtt_mean_ms
+float64 rtt_std_ms
+float64 jitter_ms
+float64 loss_rate_pct
+float64 delta_max_ms
+string network_state
