@@ -168,6 +168,73 @@ def execute_pick():
     arm_set_position(pre_target_position)
     print('[execute_pick] Stage 1: pre-grasp position reached')
 
+    # ── Closed-loop refinement ────────────────────────────────────────────────
+    # The camera is wrist-mounted, so after Stage 1 the camera pose has changed
+    # and the object is now closer (better depth accuracy).  Re-run the full
+    # grasp estimator from this new vantage point and update the grasp target
+    # before committing to rotation and final advance.
+    rospy.sleep(0.3)  # let arm settle and receive a fresh camera frame
+
+    # Re-fetch camera→base rotation since the camera has moved with the arm.
+    _tf2 = transform_frames("camera_color_frame", "base_link")
+    if _tf2 is not None:
+        _q2 = _tf2.transform.rotation
+        R_cam_base = _Rotation.from_quat([_q2.x, _q2.y, _q2.z, _q2.w]).as_matrix()
+
+    # Project the known object position (base_link) into the new camera frame
+    # so we know where to click for re-segmentation.
+    _obj_in_cam = transform_pypoint(
+        (float(target_position.x), float(target_position.y), float(target_position.z)),
+        "base_link", "camera_color_frame"
+    )
+    _ref_color = color
+    _ref_depth = depth
+    _ref_info  = color_info
+    if (_obj_in_cam is not None and _obj_in_cam.z > 0
+            and _ref_color is not None and _ref_depth is not None):
+        _fx = _ref_info.K[0]; _cx = _ref_info.K[2]
+        _fy = _ref_info.K[4]; _cy = _ref_info.K[5]
+        _u = int(_fx * _obj_in_cam.x / _obj_in_cam.z + _cx)
+        _v = int(_fy * _obj_in_cam.y / _obj_in_cam.z + _cy)
+        _h, _w = _ref_color.shape[:2]
+        if 0 <= _u < _w and 0 <= _v < _h:
+            _new_mask = segment_image((_u, _v), _ref_color)
+            _new_grasps, _new_scores = get_all_grasps(_new_mask, _ref_depth, _ref_info)
+            if _new_grasps is not None:
+                _ridx = None
+                for _i, _g in enumerate(_new_grasps):
+                    if (R_cam_base @ _g[:3, 2])[2] > 0.5:
+                        continue
+                    _ridx = _i
+                    break
+                if _ridx is None:
+                    _ridx = 0
+                _rg = _new_grasps[_ridx]
+                _ra = R_cam_base @ _rg[:3, 2]
+                _rp = transform_pypoint(tuple(_rg[:3, 3].tolist()), "camera_color_frame", "base_link")
+                _re = _Rotation.from_matrix(_rg[:3, :3]).as_euler('xyz')
+                _ro = transform_pyrotation(Point3D(*_re.tolist()), "camera_color_frame", "base_link")
+                if _rp is not None and _ro is not None:
+                    target_position    = _rp
+                    target_orientation = _ro
+                    approach_dir_base  = _ra
+                    grasp_position = Point3D(
+                        float(_rp.x) + _ra[0] * GRASP_DEPTH_OFFSET_M,
+                        float(_rp.y) + _ra[1] * GRASP_DEPTH_OFFSET_M,
+                        float(_rp.z) + _ra[2] * GRASP_DEPTH_OFFSET_M,
+                    )
+                    print(f'[execute_pick] Refinement updated grasp: '
+                          f'confidence={_new_scores[_ridx]:.3f}  '
+                          f'approach=[{_ra[0]:.2f},{_ra[1]:.2f},{_ra[2]:.2f}]')
+                else:
+                    print('[execute_pick] Refinement: TF failed, keeping original grasp.')
+            else:
+                print('[execute_pick] Refinement: no grasps found, keeping original.')
+        else:
+            print('[execute_pick] Refinement: projected point out of frame, keeping original.')
+    else:
+        print('[execute_pick] Refinement: skipped (no frame or object behind camera).')
+
     # ── Stage 2: rotate to grasp orientation in place ─────────────────────────
     # Now that we are at the right spatial location the shoulder/elbow
     # configuration is already correct and a pure wrist rotation is enough.
