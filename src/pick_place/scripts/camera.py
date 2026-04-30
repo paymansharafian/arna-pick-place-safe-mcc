@@ -1,7 +1,7 @@
 import rospy
 import cv2
 import numpy as np
-from sensor_msgs.msg import Image, CameraInfo
+from sensor_msgs.msg import Image, CameraInfo, CompressedImage
 from cv_bridge import CvBridge, CvBridgeError
 from queue import Queue
 from threading import Thread
@@ -9,7 +9,7 @@ from typing import Optional, Tuple, List, Callable
 from typing import Optional, Tuple
 
 class CameraStream:
-    def __init__(self, color_topic: str, depth_topic: str, color_info_topic: str, depth_info_topic: str, queue_size: int = 2):
+    def __init__(self, color_topic: str, depth_topic: str, color_info_topic: str, depth_info_topic: str, queue_size: int = 2, use_compressed: bool = False):
         self.color_topic = color_topic
         self.depth_topic = depth_topic
         self.color_info_topic = color_info_topic
@@ -22,6 +22,7 @@ class CameraStream:
         self.current_depth_frame: Optional[np.ndarray] = None
         self.frame_callbacks: List[Callable] = []
         self.bridge = CvBridge()
+        self.use_compressed = use_compressed
         self.color_info: Optional[CameraInfo] = None
         self.depth_info: Optional[CameraInfo] = None
 
@@ -33,6 +34,16 @@ class CameraStream:
         except CvBridgeError as e:
             rospy.logerr(f"CvBridge Error (Color): {e}")
 
+    def color_compressed_callback(self, msg: CompressedImage) -> None:
+        try:
+            np_arr = np.frombuffer(msg.data, np.uint8)
+            cv_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+            if cv_image is not None:
+                self.current_color_frame = cv_image
+                self.update_queue()
+        except Exception as e:
+            rospy.logerr(f"Error decoding compressed color: {e}")
+
     def depth_callback(self, msg: Image) -> None:
         try:
             cv_image = self.bridge.imgmsg_to_cv2(msg, "16UC1")
@@ -40,6 +51,18 @@ class CameraStream:
             self.update_queue()
         except CvBridgeError as e:
             rospy.logerr(f"CvBridge Error (Depth): {e}")
+
+    def depth_compressed_callback(self, msg: CompressedImage) -> None:
+        try:
+            # compressedDepth has a 12-byte header (4-byte format + 8-byte config)
+            # before the actual PNG-encoded 16-bit depth data
+            np_arr = np.frombuffer(msg.data[12:], np.uint8)
+            cv_image = cv2.imdecode(np_arr, cv2.IMREAD_UNCHANGED)
+            if cv_image is not None:
+                self.current_depth_frame = cv_image
+                self.update_queue()
+        except Exception as e:
+            rospy.logerr(f"Error decoding compressed depth: {e}")
 
     def color_info_callback(self, msg: CameraInfo) -> None:
         self.color_info = msg
@@ -95,8 +118,13 @@ class CameraStream:
     def run(self) -> None:
         self.running = True
         self.display_thread.start()
-        rospy.Subscriber(self.color_topic, Image, self.color_callback)
-        rospy.Subscriber(self.depth_topic, Image, self.depth_callback)
+        if self.use_compressed:
+            rospy.Subscriber(self.color_topic + '/compressed', CompressedImage, self.color_compressed_callback)
+            rospy.Subscriber(self.depth_topic + '/compressedDepth', CompressedImage, self.depth_compressed_callback)
+            rospy.loginfo(f'CameraStream: using compressed transport for color and depth')
+        else:
+            rospy.Subscriber(self.color_topic, Image, self.color_callback)
+            rospy.Subscriber(self.depth_topic, Image, self.depth_callback)
         rospy.Subscriber(self.color_info_topic, CameraInfo, self.color_info_callback)
         rospy.Subscriber(self.depth_info_topic, CameraInfo, self.depth_info_callback)
 
