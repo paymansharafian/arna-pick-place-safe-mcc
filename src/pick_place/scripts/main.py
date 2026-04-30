@@ -42,7 +42,8 @@ cam = CameraStream(
     color_topic='/camera/color/image_raw',
     depth_topic='/camera/depth_registered/sw_registered/image_rect_raw',
     color_info_topic='/camera/color/camera_info',
-    depth_info_topic='/camera/depth/camera_info'
+    depth_info_topic='/camera/depth/camera_info',
+    use_compressed=True
 )
 
 # mouse click is handled in frame_cb
