@@ -1,0 +1,70 @@
+# mpc_cbf_params.yaml
+# Loaded by mpc_cbf_arm_node at startup via rosparam.
+# All sections are namespaced under the node's private namespace (~).
+
+# ── Workspace box (metres, base_link frame) ──────────────────────────────────
+# x = front(+) / back(-)   y = left(+) / right(-)   z = up
+workspace_x_min: -0.46
+workspace_x_max:  0.99
+workspace_y_min: -0.37
+workspace_y_max:  0.99
+workspace_z_min:  0.01
+workspace_z_max:  0.94
+
+# ── Speed constraint ──────────────────────────────────────────────────────────
+# h_speed = v_max_ee^2 - ||v_ee||^2 >= 0
+v_max_ee_ms: 0.4          # max end-effector speed (m/s), linear axes only
+
+# ── MPC horizon ───────────────────────────────────────────────────────────────
+# N = clip(ceil(delta_max_ms / 10), horizon_min, horizon_max)
+# dt_s must match the frontend publish period
+dt_s:         0.01        # 10 ms control period
+horizon_min:  10
+horizon_max:  25
+
+# ── CBF decay gains ───────────────────────────────────────────────────────────
+# gamma in (0, 1]: 1.0 = hardest constraint (no decay allowed)
+cbf_gamma_workspace: 1.0
+cbf_gamma_speed:     1.0
+
+# ── Adaptive safety margins ───────────────────────────────────────────────────
+# Effective margin = epsilon_base + k_epsilon * rtt_std_ms
+# Applied as a shrink on workspace bounds and speed limit.
+# Tunable live via dynamic_reconfigure.
+epsilon_base_workspace: 0.02   # m  — base margin on each workspace face
+k_epsilon_workspace:    0.001  # m / ms_jitter
+
+epsilon_base_speed: 0.02       # m/s — base margin on speed limit
+k_epsilon_speed:    0.0005     # (m/s) / ms_jitter
+
+# ── Slack variable penalties (soft CBF) ───────────────────────────────────────
+# Large penalty discourages constraint violation but prevents hard infeasibility.
+slack_penalty_workspace: 1.0e5
+slack_penalty_speed:     1.0e5
+slack_penalty_accel:     1.0e4
+
+# ── Stage cost weights ────────────────────────────────────────────────────────
+# Diagonal weights for 6D state (pos x,y,z  vel x,y,z) and 6D control
+Q_pos:  [100.0, 100.0, 100.0]   # position tracking
+Q_vel:  [10.0,  10.0,  10.0]    # velocity tracking
+R_lin:  [1.0,   1.0,   1.0]     # linear  control effort
+R_ang:  [1.0,   1.0,   1.0]     # angular control effort
+# Terminal cost scale (multiplies Q)
+Q_terminal_scale: 10.0
+
+# ── Low-pass filter on reference trajectory ───────────────────────────────────
+# First-order LPF on incoming operator commands.  Cutoff ~5 Hz at dt=10 ms.
+# alpha = exp(-2*pi*f_c*dt)  →  f_c=5 Hz, dt=0.01 s  →  alpha ≈ 0.73
+lpf_alpha: 0.73
+
+# ── Constraint A: Acceleration CBF ───────────────────────────────────────────
+# h_acc = arm_accel_max^2*dt^2 - ||u_k - v_ee_current||^2 >= 0
+# Tunable live via dynamic_reconfigure.
+jerk_and_accel:
+  arm_accel_max:   2.0    # m/s^2 — max Cartesian acceleration (linear)
+  gamma_acc:       1.0    # CBF decay gain for acceleration constraint
+
+  # ── Constraint B: Jerk minimization penalty ──────────────────────────────
+  # Stage cost addition: w_j * ||u_{k+1} - 2*u_k + u_{k-1}||^2
+  jerk_weight_xy:  0.5    # weight for x/y axes
+  jerk_weight_z:   0.5    # weight for z axis

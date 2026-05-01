@@ -13,6 +13,7 @@ find_package(catkin REQUIRED COMPONENTS
   cv_bridge
   image_transport
   message_generation
+  dynamic_reconfigure
 )
 
 add_message_files(
@@ -25,6 +26,10 @@ generate_messages(
   std_msgs
 )
 
+generate_dynamic_reconfigure_options(
+  cfg/MpcCbfArm.cfg
+)
+
 catkin_package(CATKIN_DEPENDS
   kortex_driver
   roscpp
@@ -33,6 +38,7 @@ catkin_package(CATKIN_DEPENDS
   cv_bridge
   image_transport
   message_runtime
+  dynamic_reconfigure
 )
 
 find_package(OpenCV)
