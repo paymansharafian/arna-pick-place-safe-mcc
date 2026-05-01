@@ -3,6 +3,14 @@
 
 <arg name="enable_network_monitor" default="true" />
 
+<!-- Phase 1: MPC-CBF arm safety filter
+     When true:  mpc_cbf_arm_node filters /my_gen3/in/cartesian_velocity_desired
+                 → /my_gen3/in/cartesian_velocity using full MPC-CBF with CasADi.
+     When false: arm_cmd_passthrough_node relays the topic verbatim (zero processing).
+     Exactly one of the two nodes is always running — no commands are silently dropped.
+     Override: roslaunch pick_place pick_place.launch enable_mpc_cbf:=false -->
+<arg name="enable_mpc_cbf" default="true" />
+
 <include file="$(find pick_place)/launch/kortex_driver.launch">
     <arg name="start_rviz" value="false" />
 </include>
@@ -28,6 +36,21 @@
 <!-- <node pkg="web_video_server" type="web_video_server" name="web_video_server" output="screen" /> -->
 
 <node pkg="pick_place" type="main.py" name="pick_place" output="screen" />
+
+<!-- Phase 1: Arm velocity safety filter (exactly one branch active at all times) -->
+<group if="$(arg enable_mpc_cbf)">
+    <node pkg="pick_place" type="mpc_cbf_arm_node.py"
+          name="mpc_cbf_arm_node" output="screen">
+        <!-- All tuning parameters loaded from mpc_cbf_params.yaml.
+             Override individual values here if needed. -->
+        <rosparam command="load"
+                  file="$(find pick_place)/config/mpc_cbf_params.yaml" />
+    </node>
+</group>
+<group unless="$(arg enable_mpc_cbf)">
+    <node pkg="pick_place" type="arm_cmd_passthrough_node.py"
+          name="arm_cmd_passthrough_node" output="screen" />
+</group>
 
 <!-- Phase 0: Network Quality Monitor
      Disable with: roslaunch pick_place pick_place.launch enable_network_monitor:=false -->
