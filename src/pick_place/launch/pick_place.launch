@@ -2,6 +2,7 @@
 <launch>
 
 <arg name="enable_network_monitor" default="true" />
+<arg name="enable_network_watchdog" default="true" />
 
 <!-- Phase 1: MPC-CBF arm safety filter
      When true:  mpc_cbf_arm_node filters /my_gen3/in/cartesian_velocity_desired
@@ -62,6 +63,13 @@
     <!-- Monitor: aggregates /browser_rtt_ms samples and publishes /network_quality -->
     <node pkg="pick_place" type="network_monitor_node.py"
           name="network_monitor_node" output="screen" />
+    <!-- Phase 3: Network watchdog — coordinates adaptive behaviour of
+         Phases 1 and 2 via dynamic_reconfigure on state transitions.
+         Disable with: roslaunch pick_place pick_place.launch enable_network_watchdog:=false -->
+    <group if="$(arg enable_network_watchdog)">
+        <node pkg="pick_place" type="network_watchdog_node.py"
+              name="network_watchdog_node" output="screen" />
+    </group>
 </group>
 
 <!-- Start rviz using pick_place.rviz -->
