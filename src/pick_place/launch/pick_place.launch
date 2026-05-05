@@ -1,8 +1,9 @@
 
 <launch>
 
-<arg name="enable_network_monitor" default="true" />
-<arg name="enable_network_watchdog" default="true" />
+<arg name="enable_network_monitor"  default="true" />
+  <arg name="enable_network_watchdog" default="true" />
+  <arg name="enable_operator_intent"  default="true" />
 
 <!-- Phase 1: MPC-CBF arm safety filter
      When true:  mpc_cbf_arm_node filters /my_gen3/in/cartesian_velocity_desired
@@ -70,6 +71,13 @@
         <node pkg="pick_place" type="network_watchdog_node.py"
               name="network_watchdog_node" output="screen" />
     </group>
+</group>
+
+<!-- Phase 4: Operator intent — adaptive λ via scalar-α Boltzmann model + PGD.
+     Disable with: roslaunch pick_place pick_place.launch enable_operator_intent:=false -->
+<group if="$(arg enable_operator_intent)">
+    <node pkg="pick_place" type="operator_intent_node.py"
+          name="operator_intent_node" output="screen" />
 </group>
 
 <!-- Start rviz using pick_place.rviz -->

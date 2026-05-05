@@ -24,7 +24,7 @@ Publishes /safety_mode (std_msgs/String) at 10 Hz for GUI display.
 import rospy
 import threading
 
-from std_msgs.msg     import String
+from std_msgs.msg     import String, Float32
 from geometry_msgs.msg import Twist
 from kortex_driver.msg import TwistCommand
 from pick_place.msg   import NetworkQuality
@@ -32,13 +32,12 @@ from pick_place.msg   import NetworkQuality
 import dynamic_reconfigure.client as drc
 
 # ── Mode transition table ──────────────────────────────────────────────────────
-# (epsilon_multiplier, N_arm_override)
-# N_arm_override = None → let mpc_cbf_arm_node compute N from delta_max_ms
+# (epsilon_multiplier, N_arm_override, lambda_network)
 MODE_TABLE = {
-    'NOMINAL':  {'eps_mult': 1.0,  'N_min_override': None, 'N_max_override': None},
-    'DEGRADED': {'eps_mult': 1.3,  'N_min_override': 15,   'N_max_override': None},
-    'POOR':     {'eps_mult': 1.8,  'N_min_override': 25,   'N_max_override': 25},
-    'FAILED':   {'eps_mult': 1.8,  'N_min_override': None, 'N_max_override': None},
+    'NOMINAL':  {'eps_mult': 1.0,  'N_min_override': None, 'N_max_override': None, 'lambda_network': 0.0},
+    'DEGRADED': {'eps_mult': 1.3,  'N_min_override': 15,   'N_max_override': None, 'lambda_network': 0.3},
+    'POOR':     {'eps_mult': 1.8,  'N_min_override': 25,   'N_max_override': 25,   'lambda_network': 0.6},
+    'FAILED':   {'eps_mult': 1.8,  'N_min_override': None, 'N_max_override': None, 'lambda_network': 1.0},
 }
 
 # Watchdog: if no /network_quality message arrives within this many seconds,
@@ -74,6 +73,8 @@ class NetworkWatchdog:
 
         # ── Publishers ────────────────────────────────────────────────────────
         self._mode_pub = rospy.Publisher('/safety_mode', String, queue_size=1, latch=True)
+        self._lambda_network_pub = rospy.Publisher(
+            '/network_watchdog/lambda_network', Float32, queue_size=1, latch=True)
 
         # Zero-velocity publishers for FAILED mode
         self._base_zero_pub = rospy.Publisher(
@@ -92,6 +93,7 @@ class NetworkWatchdog:
 
         # Publish initial mode
         self._mode_pub.publish(String(data='NOMINAL'))
+        self._lambda_network_pub.publish(Float32(data=0.0))
         rospy.loginfo('[network_watchdog] Ready — monitoring /network_quality')
 
     # ── Helpers ───────────────────────────────────────────────────────────────
@@ -177,6 +179,7 @@ class NetworkWatchdog:
                 return
 
         self._mode_pub.publish(String(data=mode))
+        self._lambda_network_pub.publish(Float32(data=MODE_TABLE.get(mode, MODE_TABLE['FAILED'])['lambda_network']))
 
     def _failed_zero_cb(self, _event):
         """20 Hz: flood zero-velocity in FAILED mode."""
@@ -210,6 +213,8 @@ class NetworkWatchdog:
 
         self._apply_mode(new_mode)
         self._mode_pub.publish(String(data=new_mode))
+        lam = MODE_TABLE[new_mode]['lambda_network']
+        self._lambda_network_pub.publish(Float32(data=lam))
 
 
 def main():
