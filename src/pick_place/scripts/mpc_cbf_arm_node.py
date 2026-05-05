@@ -84,7 +84,8 @@ from dynamic_reconfigure.server import Server as DynReconfigureServer
 from kortex_driver.msg import TwistCommand, BaseCyclic_Feedback
 from pick_place.msg import NetworkQuality
 from pick_place.cfg import MpcCbfArmConfig
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, Float32
+from geometry_msgs.msg import Twist
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -348,6 +349,18 @@ def _publish_twist(pub, u6):
     pub.publish(msg)
 
 
+def _publish_safe_ref(pub, u6):
+    """Publish QP output as geometry_msgs/Twist for operator_intent_node."""
+    msg = Twist()
+    msg.linear.x  = float(u6[0])
+    msg.linear.y  = float(u6[1])
+    msg.linear.z  = float(u6[2])
+    msg.angular.x = float(u6[3])
+    msg.angular.y = float(u6[4])
+    msg.angular.z = float(u6[5])
+    pub.publish(msg)
+
+
 def main():
     rospy.init_node('mpc_cbf_arm_node', anonymous=False)
 
@@ -404,6 +417,8 @@ def main():
     pick_running     = False
     u_prev           = np.zeros(6)
     u_prev2          = np.zeros(6)
+    lambda_combined  = 0.0
+    lambda_combined_time = 0.0   # ros time; stale after 1 s → treat as 0.0
 
     # Dynamic reconfigure state (initialised from param server)
     dr = {
@@ -442,6 +457,8 @@ def main():
     # ── Publisher ─────────────────────────────────────────────────────────
     safe_pub = rospy.Publisher(
         '/my_gen3/in/cartesian_velocity', TwistCommand, queue_size=1)
+    safe_ref_pub = rospy.Publisher(
+        '/mpc_cbf_arm/safe_reference', Twist, queue_size=1)
 
     # ── Dynamic reconfigure server ────────────────────────────────────────
     # Seed the parameter server with the values from the YAML file so that
@@ -507,6 +524,12 @@ def main():
         with lock:
             pick_running = msg.data
 
+    def lambda_combined_cb(msg):
+        nonlocal lambda_combined, lambda_combined_time
+        with lock:
+            lambda_combined  = float(msg.data)
+            lambda_combined_time = time.time()
+
     rospy.Subscriber('/my_gen3/base_feedback',
                      BaseCyclic_Feedback, feedback_cb, queue_size=1)
     rospy.Subscriber('/network_quality',
@@ -514,6 +537,8 @@ def main():
     rospy.Subscriber('/my_gen3/in/cartesian_velocity_desired',
                      TwistCommand, desired_cb, queue_size=1)
     rospy.Subscriber('/pick_running', Bool, pick_cb, queue_size=1)
+    rospy.Subscriber('/operator_intent/lambda_combined',
+                     Float32, lambda_combined_cb, queue_size=1)
 
     # ── 100 Hz control timer ──────────────────────────────────────────────
     timer_busy = threading.Event()
@@ -538,6 +563,7 @@ def main():
                 _rtt_s  = rtt_std_ms
                 _N      = N_current
                 _d      = dr.copy()
+                _lc     = lambda_combined if (time.time() - lambda_combined_time < 1.0) else 0.0
 
             # Command-age watchdog: if no desired message for >300 ms, treat as zero.
             # This stops the arm when the joystick is released and the frontend
@@ -546,6 +572,10 @@ def main():
             if _cmd_age > CMD_TIMEOUT:
                 _u_des = np.zeros(6)
 
+            # λ blending: scale tracking aggressiveness.
+            # CBF constraints remain hard; only the QP tracking pull is reduced.
+            _u_des = (1.0 - _lc) * _u_des
+
             if _pick:
                 return
 
@@ -553,6 +583,7 @@ def main():
                 rospy.logwarn_throttle(5.0,
                     '[mpc_cbf_arm] No base_feedback yet — passing through')
                 _publish_twist(safe_pub, _u_des)
+                _publish_safe_ref(safe_ref_pub, _u_des)
                 return
 
             # Adaptive margins
@@ -597,7 +628,9 @@ def main():
                 rospy.logwarn('[mpc_cbf_arm] Solver failed — clamped passthrough')
                 u_safe = np.clip(_u_des[0:3], -v_max_lin, v_max_lin)
                 u_ang  = np.clip(_u_des[3:6], -v_max_ang, v_max_ang)
-                _publish_twist(safe_pub, np.concatenate([u_safe, u_ang]))
+                u_clamp = np.concatenate([u_safe, u_ang])
+                _publish_twist(safe_pub, u_clamp)
+                _publish_safe_ref(safe_ref_pub, u_clamp)
                 return
 
             # Warn on active slack
@@ -617,6 +650,7 @@ def main():
                     '[mpc_cbf_arm] Accel CBF slack = %.4f', ac_sl)
 
             _publish_twist(safe_pub, u0)
+            _publish_safe_ref(safe_ref_pub, u0)
 
             # Update jerk ring buffer
             u_prev2 = u_prev.copy()

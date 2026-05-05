@@ -28,6 +28,7 @@ generate_messages(
 
 generate_dynamic_reconfigure_options(
   cfg/MpcCbfArm.cfg
+  cfg/OperatorIntent.cfg
 )
 
 catkin_package(CATKIN_DEPENDS
