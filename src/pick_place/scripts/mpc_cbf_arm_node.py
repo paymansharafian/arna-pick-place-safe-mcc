@@ -371,9 +371,9 @@ def main():
     p_min_nom = np.array([gp('workspace_x_min', -0.46),
                           gp('workspace_y_min', -0.37),
                           gp('workspace_z_min',  0.01)])
-    p_max_nom = np.array([gp('workspace_x_max',  0.9),
-                          gp('workspace_y_max',  0.9),
-                          gp('workspace_z_max',  0.94)])
+    p_max_nom = np.array([gp('workspace_x_max',  0.99),
+                          gp('workspace_y_max',  0.99),
+                          gp('workspace_z_max',  0.99)])
 
     v_max_ee_nom  = float(gp('v_max_ee_ms',             0.4))
     dt            = float(gp('dt_s',                     0.01))

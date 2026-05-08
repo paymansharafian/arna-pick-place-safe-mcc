@@ -42,7 +42,7 @@
 <!-- Phase 1: Arm velocity safety filter (exactly one branch active at all times) -->
 <group if="$(arg enable_mpc_cbf)">
     <node pkg="pick_place" type="mpc_cbf_arm_node.py"
-          name="mpc_cbf_arm_node" output="screen">
+          name="mpc_cbf_arm_node" >
         <!-- All tuning parameters loaded from mpc_cbf_params.yaml.
              Override individual values here if needed. -->
         <rosparam command="load"
@@ -51,7 +51,7 @@
 </group>
 <group unless="$(arg enable_mpc_cbf)">
     <node pkg="pick_place" type="arm_cmd_passthrough_node.py"
-          name="arm_cmd_passthrough_node" output="screen" />
+          name="arm_cmd_passthrough_node" />
 </group>
 
 <!-- Phase 0: Network Quality Monitor
@@ -77,7 +77,12 @@
      Disable with: roslaunch pick_place pick_place.launch enable_operator_intent:=false -->
 <group if="$(arg enable_operator_intent)">
     <node pkg="pick_place" type="operator_intent_node.py"
-          name="operator_intent_node" output="screen" />
+          name="operator_intent_node" output="screen">
+        <!-- All tuning parameters loaded from operator_intent_params.yaml.
+             Override individual values here if needed. -->
+        <rosparam command="load"
+                  file="$(find pick_place)/config/operator_intent_params.yaml" />
+    </node>
 </group>
 
 <!-- Start rviz using pick_place.rviz -->
