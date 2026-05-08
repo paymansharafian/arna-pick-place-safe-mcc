@@ -1,0 +1,37 @@
+# ── Phase 4: Operator Intent Parameters ─────────────────────────────────────
+# Loaded by pick_place.launch into operator_intent_node private namespace (~/).
+# All values can also be tuned live in rqt_reconfigure (dynamic_reconfigure).
+# Changes here take effect on next roslaunch — no need to edit the node.
+
+# PGD (Projected Gradient Descent) ─────────────────────────────────────────
+# Learning rate μ for the normalized LMS alpha update:
+#   α ← clip(α − μ · dot(e, u_R) / ||u_R||², α_floor, 1−α_floor)
+# Typical convergence: ~0.5 s at 20 Hz with step_size = 0.10.
+# Increase for faster adaptation, decrease if alpha oscillates.
+pgd_step_size: 0.05
+
+# Reserved — not used in the normalized LMS calculation. Keep at 0.01.
+pgd_gamma: 0.01
+
+# λ_operator = 1 − sigmoid(k · (α − 0.5))
+# Higher k → sharper transition around α = 0.5.
+sigmoid_sharpness: 8.0
+
+# Clamp on λ_operator output.
+# lambda_op is always in [lambda_op_min, lambda_op_max].
+lambda_op_min: 0.1
+lambda_op_max: 0.9
+
+# α is projected onto [alpha_floor, 1 − alpha_floor] after each PGD step.
+# Prevents α from saturating at 0 or 1 (keeps gradient informative).
+alpha_floor: 0.01
+
+# PGD update is skipped when ||u_R|| < excitation_thresh to avoid
+# gradient noise when the robot is not being commanded.
+excitation_thresh: 0.01
+
+# Idle reset ────────────────────────────────────────────────────────────────
+# If no joystick input for idle_timeout_s seconds, α is reset to 0.5
+# (neutral — no prior assumption about operator intent).
+reset_on_idle: true
+idle_timeout_s: 5.0

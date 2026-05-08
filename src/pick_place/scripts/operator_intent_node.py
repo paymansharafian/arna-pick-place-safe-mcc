@@ -53,7 +53,7 @@ import rospy
 from dynamic_reconfigure.server import Server as DynReconfigureServer
 from geometry_msgs.msg          import Twist
 from kortex_driver.msg          import TwistCommand
-from std_msgs.msg               import Float32, Float32MultiArray
+from std_msgs.msg               import Float32
 
 from pick_place.cfg import OperatorIntentConfig
 
@@ -157,16 +157,14 @@ def main():
 
     def base_desired_cb(msg):
         """
-        /ARNA_TELEOP_MOV is Float32MultiArray.
-        data[0] = forward (vx), data[1] = strafe (vy), data[2] = rotation (oz).
+        /cmd_vel_desired is geometry_msgs/Twist — actual velocity (m/s, rad/s),
+        same units as /base_cbf/safe_reference.  Using this instead of the raw
+        joystick /ARNA_TELEOP_MOV avoids a scale mismatch in the PGD model.
         """
         nonlocal u_H_base, last_joystick_time
-        d = list(msg.data)
-        vx = float(d[0]) if len(d) > 0 else 0.0
-        vy = float(d[1]) if len(d) > 1 else 0.0
-        oz = float(d[2]) if len(d) > 2 else 0.0
         with lock:
-            u_H_base = np.array([vx, vy, 0.0, 0.0, 0.0, oz])
+            u_H_base = np.array([msg.linear.x, msg.linear.y, 0.0,
+                                  0.0, 0.0, msg.angular.z])
             last_joystick_time = time.time()
 
     def lambda_net_cb(msg):
@@ -180,8 +178,8 @@ def main():
                      Twist, base_safe_ref_cb, queue_size=1)
     rospy.Subscriber('/my_gen3/in/cartesian_velocity_desired',
                      TwistCommand, arm_desired_cb, queue_size=1)
-    rospy.Subscriber('/ARNA_TELEOP_MOV',
-                     Float32MultiArray, base_desired_cb, queue_size=1)
+    rospy.Subscriber('/cmd_vel_desired',
+                     Twist, base_desired_cb, queue_size=1)
     rospy.Subscriber('/network_watchdog/lambda_network',
                      Float32, lambda_net_cb, queue_size=1)
 
@@ -218,12 +216,15 @@ def main():
         # Excitation guard: skip PGD when safe reference is near-zero
         norm_uR = np.linalg.norm(u_R_all)
         if norm_uR >= _cfg['excitation_thresh']:
-            # PGD update
-            e    = alpha * u_R_all - u_H_all          # prediction error (12D)
-            grad = np.dot(e, u_R_all)                  # scalar gradient
+            # Normalized LMS gradient: divide by ||u_R||² so convergence rate
+            # is scale-invariant regardless of command magnitude.
+            # With pgd_step_size=0.1 this converges in ~10 steps (0.5 s at 20 Hz).
+            e        = alpha * u_R_all - u_H_all       # prediction error (12D)
+            grad_raw = np.dot(e, u_R_all)              # scalar gradient
+            grad     = grad_raw / max(norm_uR ** 2, 1e-6)  # normalized
             a_fl = _cfg['alpha_floor']
             alpha = float(np.clip(
-                alpha - _cfg['pgd_step_size'] * _cfg['pgd_gamma'] * grad,
+                alpha - _cfg['pgd_step_size'] * grad,
                 a_fl, 1.0 - a_fl
             ))
 
