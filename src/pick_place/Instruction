@@ -1,7 +1,0 @@
-In this pc first connect to ARNA wifi using ssh blackbird.lan
-then in the terminal: roslaunch pick_place pick_place.launch
-On the browser open the Kinova.lan interface. 
-Then you will see the interface. 
-Select the object you want to pick. 
-Then press 'p' on keyboard for auto pickup
-
