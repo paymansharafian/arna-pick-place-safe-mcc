@@ -1,106 +1,231 @@
-The ARNA pick\_place package allows the Kinova arm to autonomously pick up objects and operate the arm through a GUI. 
-It uses a system external to ARNA to run the package in its current state due to dependency issues with ARNA’s outdated firmware, 
-however it should be integrated into ARNA’s ROS system in the future after ARNA has been upgraded (preferably to ROS 2 or ROS noetic).
+# ARNA Teleoperation and Manipulation System
 
-System:
-- Ubuntu 20.04  
-- ROS Noetic
+ARNA is a distributed, safety-critical robot teleoperation and autonomous manipulation platform. It combines a Kinova Gen3 7-DOF arm with an omnidirectional mobile base, controlled remotely through a browser-based GUI over a Cloudflare-tunneled WebSocket connection.
 
-Dependencies
+A layered safety architecture continuously filters operator commands through network-quality monitoring, Model Predictive Control with Control Barrier Functions (MPC-CBF) on the arm, a CBF-QP filter on the base, network-aware constraint tightening, and an online operator-intent estimator — all before any velocity command reaches the hardware.
 
-- ROS Dependencies  
-  - Kortex Driver  
-    - [https://github.com/Kinovarobotics/ros\_kortex](https://github.com/Kinovarobotics/ros_kortex)   
-  - Kortex Vision  
-    - [https://github.com/Kinovarobotics/ros\_kortex\_vision](https://github.com/Kinovarobotics/ros_kortex_vision)   
-  - rosbridge\_server  
-  - web\_video\_server  
-  - Use rosdep to install other dependencies  
-- Python 3.8+  
-  - All Python dependencies are in the requirements.txt  
-- Catkin build
+---
 
-Compilation
+## System Overview
 
-- Install ROS Noetic & make sure Python 3.8+ is available  
-- Clone Repository from GitHub: https://github.com/LARRILabs/ARNA_PICK_PLACE/
-- Change Directories into ARNA\_PICK\_PLACE/src/  
-- Clone and follow install directions from Kortex Driver and Vision GitHubs  
-- Run the following commands  
-  - sudo apt-get install ros-noetic-rosbridge-server ros-noetic-web-video-server  
-  - sudo apt-get install python3-rosdep  
-  - rosdep install \--from-paths src \--ignore-src \-r \-y  
-  - sudo apt-get install python3-catkin-tools  
-- Change Directories into ARNA\_PICK\_PLACE/src/pick\_place  
-- Run the following commands  
-  - pip install \-r requirements.txt
+| Machine | Role | OS / ROS | IP |
+|---------|------|----------|----|
+| Legion | ROS master, arm control, safety nodes, web server | Ubuntu 20.04 / ROS Noetic | `10.0.0.101` |
+| Blackbird | Base EtherCAT controller, base safety filter | Ubuntu 16.04 / ROS Kinetic | `10.0.0.20` |
+| Jetson | Velodyne LiDAR, navigation stack | Ubuntu 18.04 / ROS Kinetic | `10.0.0.60` |
+| Velodyne VLP-16 | 3-D LiDAR sensor | — | `10.0.0.40` |
 
-Execution and User Experience
+- **Web GUI:** [https://arnaconnect.stream](https://arnaconnect.stream) (Cloudflare tunnel)
+- **Main package:** `pick_place` (on Legion)
+- **Base package:** `arna_teleop` (on Blackbird)
 
-- Turn on ARNA and the kinova arm  
-- Connect to the ARNA wifi  
-- In a terminal run; “roslaunch pick\_place pick\_place.launch”  
-- NATHAN EXPLAIN GUI
+---
 
-The pick\_place code consists of 2 main functions, segment image and execute movement.
+## Safety-Critical Control Architecture
 
-Segment image function
+Operator commands pass through four cascaded safety layers before reaching the robot hardware.
 
-- When the image is clicked, it uses that point and runs FastSAM  
-  - FastSAM is the Ultralytics YOLO, segment anything model, fast version.  
-  - The model estimates and segments the object that was clicked on  
-- The segmented image is turned into a mask, which is applied to both the color and depth images using a bitwise and  
-- The rotation of the object is found (uses this angle for visualization, not grasping yet)  
-  - The mask is made into a contour, then a minimum-area bounding rectangle is fitted around it.  
-  - The change in x and y across one of the longer sides are used to get the arc-tangent of the 2, atan(dx/dy), then converted to degrees.  
-  - Degrees are normalized to be from \-90 to 90, instead of 0 to 180\.  
-- Grabs the center of the mask  
-  - uses the moments to approximate the center of mass  
-- Gets the closest point  
-  - x and y come from the center of the mask  
-  - Valid depths all non zero depth values inside the mask  
-  - A final Z value is taken by first getting the average of all valid depths, then taking the average of all depths which are greater than the first average.  
-  - X, Y, and Z are converted to position coordinates from pixel coordinates.  
-    - X pos \= (\[ X pix – center X \] \* Z) / focal length X  
-    - Y pos \= (\[ Y pix – center Y \] \* Z) / focal length Y
+### Network Quality Monitor
 
-Execute movement
+Runs on Legion at 10 Hz. Measures browser-reported round-trip time (RTT) over a rolling 30-sample window and publishes a normalised quality score to `/network_quality`. This signal feeds both the watchdog and the arm CBF filter.
 
-- Grabs the starting tool position, axis in which the tool is pointing and camera position  
-- Projects the camera position onto the tool plane, defined by the tool position and axis its pointing in  
-- Project the target position onto the tool frame and align the frames together with the tool position  
-- Physically align the camera to the object, getting it in the center of the camera to improve detection and grasping  
-- Resegments the image, using the center of the camera as the segmentation point  
-- Approach the object, keeping it in the center by moving along the normal of the object  
-- Move forward until the object takes up the majority of the image  
-- Resegment  
-- Get angle of the object via method discussed above  
-- Align the gripper (no longer camera) to the object, then rotate to match the angle  
-- Open gripper, move to final position, close gripper, move back to starting position
+### Arm MPC-CBF Filter
 
-User perspective
+Runs on Legion at 100 Hz. Intercepts desired Cartesian arm velocities and solves a Control Barrier Function QP (CasADi / qpOASES) that enforces joint-limit and collision-avoidance constraints. The desired command is attenuated in proportion to the combined safety signal before entering the QP, so authority is reduced continuously as network quality or operator alignment degrades.
 
-* Window shows the camera feed from the kinova arm  
-* Click anywhere on the image and it will change it to a segmented version to show what object is chosen.  
-  * Runs segmentation function  
-  * Uses FastSAM to segment based on the clicked point  
-  * Makes the object into a mask on the depth and color images  
-  * Uses the estimated center of mass for the pixel X and Y  
-  * Uses the average of the above average values on the depth as the Z  
-  * Transforms the pixel X and Y to real X and Y via the depth and camera info  
-* If you don’t like the object you can reset the image and try again.  
-* If you do, you can tell the arm to pick up the object.   
-  * Runs Execute Movement on the point chosen in segmentation  
-  * Align the camera with the object, resegment  
-  * Move towards the object so it fills most of the image, resegment  
-  * Move to final location, with the point translated to gripper frame from camera frame  
-  * Grab the object  
-* Once it grabs the object it resets to the default position
+Configuration: `ros/src/pick_place/config/mpc_cbf_params.yaml`
 
-TODO
+### Base CBF-QP Filter
 
-Add to instructions
+Runs on **Blackbird** at 50 Hz (C++, OSQP v0.6.3). Intercepts desired base velocities, fuses live LiDAR scan data for obstacle proximity, and publishes a guaranteed-safe velocity to the EtherCAT drive. Obstacle clearance is maintained even if the network fails. Like the arm filter, the desired command is attenuated by the combined safety signal before the QP is solved.
 
-- ARNA.network while connected to ARNA router
+Key parameters: `d_safe = 0.50 m`, `d_activate = 1.50 m`, `v_max_lin = 0.15 m/s`, `v_max_ang = 0.10 rad/s`
 
-Add in pics and videos of it working
+Configuration: `config/base_cbf_params.yaml` (on Blackbird)
+
+### Network Watchdog
+
+Runs on Legion. Monitors network quality and transitions through four modes, automatically tightening safety constraints and reducing operator authority as conditions worsen:
+
+| Mode | Trigger | Effect |
+|------|---------|--------|
+| NOMINAL | Normal RTT | No constraint tightening |
+| DEGRADED | Moderate RTT | Tighten CBF bounds, reduce MPC horizon |
+| POOR | High RTT | Further tighten bounds, cap MPC horizon |
+| FAILED | Link loss | Flood zero commands to both arm and base |
+
+Updates arm and base filter parameters in real time via `dynamic_reconfigure` and publishes the active mode to `/safety_mode` for display in the GUI.
+
+### Operator Intent Estimator
+
+Runs on Legion at 20 Hz. Estimates online how well the operator's commands align with the robot's safe reference trajectory using a scalar alignment coefficient updated by a normalised gradient descent rule. When the operator consistently fights the safety filters, authority is reduced for both the arm and base. Authority recovers automatically when alignment improves or the operator is idle.
+
+Configuration: `ros/src/pick_place/config/operator_intent_params.yaml`
+
+---
+
+## Dependencies
+
+### Legion (ROS Noetic)
+
+- [kortex_driver](https://github.com/Kinovarobotics/ros_kortex)
+- [ros_kortex_vision](https://github.com/Kinovarobotics/ros_kortex_vision)
+- `ros-noetic-rosbridge-server`
+- `ros-noetic-web-video-server`
+- `ros-noetic-dynamic-reconfigure`
+- `python3-catkin-tools`
+
+### Blackbird (ROS Kinetic)
+
+- OSQP v0.6.3
+- Eigen3
+
+### Python
+
+- Python 3.8+
+- See `requirements.txt` for the full list (key packages: `casadi`, `numpy`, `ultralytics`)
+
+---
+
+## Building
+
+**Legion:**
+```bash
+cd ~/ros
+source devel/setup.bash
+rosdep install --from-paths src --ignore-src -r -y
+pip install -r src/pick_place/requirements.txt
+catkin build pick_place
+```
+
+> Do **not** use `catkin_make` on Legion — the workspace uses `catkin build`.
+
+**Blackbird** (SSH in first):
+```bash
+cd ~/ros/arna_ws
+catkin_make --only-pkg-with-deps arna_teleop
+```
+
+---
+
+## Running
+
+**1. Start Legion ROS stack:**
+```bash
+export ROS_IP=10.0.0.101
+roslaunch pick_place pick_place.launch
+```
+
+All safety nodes launch automatically. Individual nodes can be disabled via launch arguments:
+
+```bash
+roslaunch pick_place pick_place.launch \
+  enable_network_monitor:=true \
+  enable_network_watchdog:=true \
+  enable_operator_intent:=true
+```
+
+**2. Start Blackbird base stack** (SSH into Blackbird, then):
+```bash
+sudo -s
+cd ros/arna_ws/src/arna_teleop/src/
+./base_interface.sh
+```
+
+**3. Web GUI and Cloudflare tunnel** are systemd services on Legion:
+```bash
+sudo systemctl restart arna-control
+sudo systemctl status cloudflared
+```
+
+The GUI is accessible remotely at [https://arnaconnect.stream](https://arnaconnect.stream) or locally over the LAN.
+
+---
+
+## Web Interface
+
+The GUI is a Next.js application connecting to three independent rosbridge WebSocket endpoints:
+
+| Endpoint | Purpose |
+|----------|---------|
+| `wss://websocket.arnaconnect.stream` | Control plane (arm, base, gripper, services) |
+| `wss://basewebsocket.arnaconnect.stream` | Base camera stream |
+| `wss://armwebsocket.arnaconnect.stream` | Arm camera stream |
+
+**Controls:**
+- Arm Cartesian velocity (2D joystick)
+- Base translation and rotation (1D / 2D joystick)
+- Gripper open / close with force feedback
+- Home action
+- Click-to-pick: click on the arm camera feed to segment an object and trigger autonomous grasping
+- Safety mode badge (NOMINAL / DEGRADED / POOR / FAILED)
+- Live arm and base camera feeds
+
+---
+
+## Autonomous Pick-and-Place
+
+### Object Segmentation
+
+1. The operator clicks a point in the arm camera feed.
+2. [FastSAM](https://github.com/CASIA-IVA-Lab/FastSAM) segments the object at the clicked point.
+3. The mask is applied to both colour and depth images.
+4. Object orientation is estimated by fitting a minimum-area bounding rectangle to the mask contour.
+5. The 3-D grasp point is computed from the mask centroid and a noise-robust depth estimate.
+
+### Grasp Execution
+
+1. Align the camera over the object using visual servoing.
+2. Re-segment from the camera centre.
+3. Approach along the object surface normal until it fills the image.
+4. Re-segment; align the gripper to the object orientation.
+5. Open gripper → move to grasp pose → close gripper → return to home pose.
+
+---
+
+## Repository Structure
+
+```
+ros/src/pick_place/
+  scripts/
+    main.py                      # Pick-and-place pipeline + arm camera node
+    network_monitor_node.py      # Network quality monitor
+    mpc_cbf_arm_node.py          # MPC-CBF arm safety filter (100 Hz)
+    network_watchdog_node.py     # Network watchdog + mode coordinator
+    operator_intent_node.py      # Operator intent estimator
+  config/
+    mpc_cbf_params.yaml          # Arm CBF tuning
+    operator_intent_params.yaml  # Operator intent tuning
+  cfg/
+    MpcCbfArm.cfg                # dynamic_reconfigure schema for arm filter
+    OperatorIntent.cfg           # dynamic_reconfigure schema for intent node
+  launch/
+    pick_place.launch            # Main launch file
+
+ros/arna_ws/src/arna_teleop/     # On Blackbird
+  src/
+    base_cbf_filter_node.cpp     # CBF-QP base safety filter (50 Hz)
+    arna_teleop_fwd_node.cpp     # Teleop forwarder
+  config/
+    base_cbf_params.yaml         # Base CBF tuning
+
+arna-control/                    # Next.js web GUI
+  components/
+    Joystick2D.tsx
+    Joystick1D.tsx
+    TFViewer.tsx
+```
+
+---
+
+## Tuning
+
+All safety parameters are set via YAML config files. **Do not edit node source files to change tuning values.**
+
+| Config file | Controls |
+|-------------|----------|
+| `config/mpc_cbf_params.yaml` | Arm CBF: MPC horizon, CBF bounds, joint limits, velocity caps |
+| `config/base_cbf_params.yaml` (Blackbird) | Base CBF: obstacle margins, velocity limits, jerk weight, slack penalty |
+| `config/operator_intent_params.yaml` | Intent estimator: learning rate, sigmoid sharpness, authority bounds, idle timeout |
+
+Parameters can also be updated at runtime via `dynamic_reconfigure` or automatically by the network watchdog as network conditions change.
