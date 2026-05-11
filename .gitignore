@@ -54,3 +54,17 @@ CATKIN_IGNORE
 *.pt
 
 .catkin_tools/
+method.txt
+methodTEX.tex
+.catkin_tools/profiles/default/devel_collisions.txt
+.gitignore
+.copilot/JETSON_MAP.md
+.copilot/LEGION_MAP.md
+.copilot/BLACKBIRD_MAP.md
+.gitignore
+.copilot/NETWORK.md
+.gitignore
+.copilot/SYSTEM_MAP.md
+.github/copilot-instructions.md
+.catkin_tools/profiles/default/devel_collisions.txt
+.catkin_tools/profiles/default/devel_collisions.txt
