@@ -430,6 +430,8 @@ def main():
         'gamma_acc':      gamma_acc0,
         'jerk_weight_xy': jerk_xy0,
         'jerk_weight_z':  jerk_z0,
+        'N_min':          N_min,
+        'N_max':          N_max,
     }
 
     # ── Build initial solver ──────────────────────────────────────────────
@@ -472,6 +474,8 @@ def main():
     rospy.set_param('~gamma_acc',              gamma_acc0)
     rospy.set_param('~jerk_weight_xy',         jerk_xy0)
     rospy.set_param('~jerk_weight_z',          jerk_z0)
+    rospy.set_param('~N_min',                  N_min)
+    rospy.set_param('~N_max',                  N_max)
 
     def dynreconf_cb(config, level):
         with lock:
@@ -483,6 +487,8 @@ def main():
             dr['gamma_acc']      = config.gamma_acc
             dr['jerk_weight_xy'] = config.jerk_weight_xy
             dr['jerk_weight_z']  = config.jerk_weight_z
+            dr['N_min']          = int(config.N_min)
+            dr['N_max']          = int(config.N_max)
         return config
 
     DynReconfigureServer(MpcCbfArmConfig, dynreconf_cb)
@@ -502,12 +508,14 @@ def main():
         nonlocal rtt_std_ms, N_current
         with lock:
             rtt_std_ms = msg.rtt_std_ms
+            n_min = dr['N_min']
+            n_max = dr['N_max']
             if msg.network_state == 'FAILED':
-                N_current = N_max
+                N_current = n_max
             else:
                 N_current = int(np.clip(
                     math.ceil(msg.delta_max_ms / dt_ms),
-                    N_min, N_max))
+                    n_min, n_max))
 
     def desired_cb(msg):
         nonlocal u_desired_lpf, last_desired_time
