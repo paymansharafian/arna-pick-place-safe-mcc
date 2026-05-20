@@ -13,7 +13,7 @@ On each state transition the node calls the dynamic_reconfigure service on:
   - mpc_cbf_arm_node      (epsilon_base_workspace, epsilon_base_speed,
                             k_epsilon_workspace, k_epsilon_speed,
                             N_min, N_max via param update trick)
-  - base_cbf_filter_node  (epsilon_base_lidar)
+  - base_mpc_cbf_node     (epsilon_base_lidar)
 
 The FAILED safe-stop is additive on top of the existing 500 ms watchdog in
 arna_teleop_fwd_node — neither that watchdog nor mpc_cbf_arm_node are modified.
@@ -47,6 +47,13 @@ QUALITY_TIMEOUT_S = 1.0
 # How often (Hz) to publish the zero-velocity flood in FAILED mode
 FAILED_PUBLISH_HZ = 20
 
+# Minimum dwell time (s) in the current mode before any downward transition
+# (POOR→DEGRADED, DEGRADED→NOMINAL, etc.).  Upward transitions are always immediate.
+DWELL_DOWN_S = 3.0
+
+# Severity order used to decide transition direction (higher = more severe)
+MODE_SEVERITY = {'NOMINAL': 0, 'DEGRADED': 1, 'POOR': 2, 'FAILED': 3}
+
 
 class NetworkWatchdog:
     def __init__(self):
@@ -58,12 +65,13 @@ class NetworkWatchdog:
         self._arm_k_eps_ws     = rospy.get_param('/mpc_cbf_arm_node/k_epsilon_workspace',    0.001)
         self._arm_eps_base_sp  = rospy.get_param('/mpc_cbf_arm_node/epsilon_base_speed',     0.02)
         self._arm_k_eps_sp     = rospy.get_param('/mpc_cbf_arm_node/k_epsilon_speed',        0.0005)
-        self._arm_N_min_base   = rospy.get_param('/mpc_cbf_arm_node/N_min',                  5)
-        self._arm_N_max_base   = rospy.get_param('/mpc_cbf_arm_node/N_max',                  30)
-        self._base_eps_lidar   = rospy.get_param('/base_cbf_filter_node/epsilon_base_lidar', 0.02)
+        self._arm_N_min_base   = rospy.get_param('/mpc_cbf_arm_node/N_min',                  10)
+        self._arm_N_max_base   = rospy.get_param('/mpc_cbf_arm_node/N_max',                  25)
+        self._base_eps_lidar   = rospy.get_param('/base_mpc_cbf_node/epsilon_base_lidar', 0.02)
 
         self._lock       = threading.Lock()
         self._mode       = 'NOMINAL'
+        self._mode_enter_t = rospy.Time.now()   # time we entered the current mode
         self._last_qual_t = None    # rospy.Time of last /network_quality message
 
         # ── dynrec clients (lazy — created on first use so the node starts
@@ -109,7 +117,7 @@ class NetworkWatchdog:
     def _base_client(self):
         if self._base_dr is None:
             try:
-                self._base_dr = drc.Client('base_cbf_filter_node', timeout=2.0)
+                self._base_dr = drc.Client('base_mpc_cbf_node', timeout=2.0)
             except Exception as e:
                 rospy.logwarn_throttle(5.0, f'[network_watchdog] base dynrec unavailable: {e}')
         return self._base_dr
@@ -200,7 +208,15 @@ class NetworkWatchdog:
             old_mode = self._mode
             if new_mode == old_mode:
                 return
+            # Upward (more severe) transitions are immediate — protection first.
+            # Downward transitions require the node to have dwelt in the current
+            # mode for at least DWELL_DOWN_S seconds to suppress chattering.
+            if MODE_SEVERITY[new_mode] < MODE_SEVERITY[old_mode]:
+                age = (rospy.Time.now() - self._mode_enter_t).to_sec()
+                if age < DWELL_DOWN_S:
+                    return   # not ready to downgrade yet
             self._mode = new_mode
+            self._mode_enter_t = rospy.Time.now()
 
         if new_mode == 'NOMINAL':
             rospy.loginfo('[network_watchdog] → NOMINAL')

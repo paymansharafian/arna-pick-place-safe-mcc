@@ -68,3 +68,7 @@ methodTEX.tex
 .github/copilot-instructions.md
 .catkin_tools/profiles/default/devel_collisions.txt
 .catkin_tools/profiles/default/devel_collisions.txt
+.github/agents/arna-docs.agent.md
+.gitignore
+.github/agents/arna-expert.agent.md
+src/pick_place/scripts/mpc_cbf_base_design.txt
