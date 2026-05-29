@@ -33,6 +33,7 @@ class NetworkMonitor:
 
         self._window: deque[float] = deque(maxlen=WINDOW_SIZE)
         self._last_rtt_time = None   # rospy.Time of last received sample
+        self._start_time    = None   # rospy.Time of first received sample (loss denominator)
 
         self._pub = rospy.Publisher(
             '/network_quality', NetworkQuality, queue_size=5
@@ -54,6 +55,8 @@ class NetworkMonitor:
             return  # ignore bogus values
         self._window.append(rtt)
         self._last_rtt_time = rospy.Time.now()
+        if self._start_time is None:
+            self._start_time = self._last_rtt_time
 
     # ── Periodic publisher ─────────────────────────────────────────────────────
     def _publish_cb(self, _event):
@@ -88,15 +91,15 @@ class NetworkMonitor:
         delta_max = float(np.percentile(arr, 99)) / 2.0
 
         # ── Loss rate ──────────────────────────────────────────────────────
-        # Estimate expected samples over the window duration.
-        # Window covers at most WINDOW_SIZE * PROBE_INTERVAL_S seconds.
-        window_duration_s = len(arr) * PROBE_INTERVAL_S
-        expected_samples  = max(len(arr), window_duration_s / PROBE_INTERVAL_S)
-        # We define loss as samples that never arrived; since we only store
-        # arrived samples we estimate loss from the gap between the oldest
-        # expected arrival time and now.
-        elapsed_s = (now - self._last_rtt_time).to_sec() + window_duration_s
-        expected  = max(1, elapsed_s / PROBE_INTERVAL_S)
+        # Use wall-clock time since the first probe arrived as the denominator,
+        # capped at the rolling-window span (WINDOW_SIZE * PROBE_INTERVAL_S).
+        # This ensures that missing probes correctly increase the expected count
+        # rather than shrinking the window duration and cancelling themselves out.
+        observation_s = min(
+            (now - self._start_time).to_sec(),
+            WINDOW_SIZE * PROBE_INTERVAL_S
+        )
+        expected  = max(1, observation_s / PROBE_INTERVAL_S)
         loss_pct  = max(0.0, (1.0 - len(arr) / expected) * 100.0)
 
         # ── State classification ───────────────────────────────────────────
