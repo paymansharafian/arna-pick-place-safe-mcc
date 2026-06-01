@@ -72,3 +72,4 @@ methodTEX.tex
 .gitignore
 .github/agents/arna-expert.agent.md
 src/pick_place/scripts/mpc_cbf_base_design.txt
+PickTex.tex
