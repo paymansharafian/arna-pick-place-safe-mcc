@@ -4,12 +4,12 @@
 
 # ── Workspace box (metres, base_link frame) ──────────────────────────────────
 # x = front(+) / back(-)   y = left(+) / right(-)   z = up
-workspace_x_min: 0.2
+workspace_x_min: -0.47
 workspace_x_max:  0.99
-workspace_y_min: -0.2
+workspace_y_min: -0.35
 workspace_y_max:  0.99
-workspace_z_min:  0.01
-workspace_z_max:  0.94
+workspace_z_min:  -0.1
+workspace_z_max:  0.99
 
 # ── Speed constraint ──────────────────────────────────────────────────────────
 # h_speed = v_max_ee^2 - ||v_ee||^2 >= 0
@@ -24,14 +24,16 @@ horizon_max:  25
 
 # ── CBF decay gains ───────────────────────────────────────────────────────────
 # gamma in (0, 1]: 1.0 = hardest constraint (no decay allowed)
-cbf_gamma_workspace: 1.0
-cbf_gamma_speed:     1.0
+# Lower values create a smooth deceleration zone before the boundary.
+# 0.5 means h must decay no faster than 50% per step → gradual approach.
+cbf_gamma_workspace: 0.5
+cbf_gamma_speed:     0.5
 
 # ── Adaptive safety margins ───────────────────────────────────────────────────
 # Effective margin = epsilon_base + k_epsilon * rtt_std_ms
 # Applied as a shrink on workspace bounds and speed limit.
 # Tunable live via dynamic_reconfigure.
-epsilon_base_workspace: 0.02   # m  — base margin on each workspace face
+epsilon_base_workspace: 0.02   # m  — base margin on each workspace face (wider → earlier activation)
 k_epsilon_workspace:    0.001  # m / ms_jitter
 
 epsilon_base_speed: 0.02       # m/s — base margin on speed limit
@@ -39,7 +41,7 @@ k_epsilon_speed:    0.0005     # (m/s) / ms_jitter
 
 # ── Slack variable penalties (soft CBF) ───────────────────────────────────────
 # Large penalty discourages constraint violation but prevents hard infeasibility.
-slack_penalty_workspace: 1.0e5
+slack_penalty_workspace: 1.0e6
 slack_penalty_speed:     1.0e5
 slack_penalty_accel:     1.0e4
 
@@ -66,5 +68,5 @@ jerk_and_accel:
 
   # ── Constraint B: Jerk minimization penalty ──────────────────────────────
   # Stage cost addition: w_j * ||u_{k+1} - 2*u_k + u_{k-1}||^2
-  jerk_weight_xy:  0.5    # weight for x/y axes
-  jerk_weight_z:   0.5    # weight for z axis
+  jerk_weight_xy:  2.0    # weight for x/y axes (higher → penalises rapid command reversal)
+  jerk_weight_z:   2.0    # weight for z axis

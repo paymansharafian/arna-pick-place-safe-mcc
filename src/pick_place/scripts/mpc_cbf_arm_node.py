@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-mpc_cbf_arm_node — Phase 1 full MPC-CBF arm safety filter (CasADi/qpOASES).
+mpc_cbf_arm_node — Phase 1 full MPC-CBF arm safety filter (CasADi/OSQP).
 
 System model
 ------------
@@ -116,7 +116,7 @@ def build_dynamics(dt: float, tau: float = 0.05):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# MPC-CBF QP solver (CasADi / qpOASES)
+# MPC-CBF QP solver (CasADi / OSQP)
 # ─────────────────────────────────────────────────────────────────────────────
 class MpcCbfSolver:
     """
@@ -279,20 +279,35 @@ class MpcCbfSolver:
         cost += slack_pen_sp * sl_sp**2
         cost += slack_pen_ac * sl_ac**2
 
-        # ── Variable bounds — replaces 12*N box constraints + 8 slack non-neg ──
-        # Velocity box on U_flat: [-v_max_lin/ang, +v_max_lin/ang] per step.
-        # Slack lower bounds: 0 (non-negativity encoded as bounds, not constraints).
-        # qpOASES treats lbx/ubx via simple projection — no active-set pivots.
+        # ── Variable bounds — velocity box + slack non-negativity as lbx/ubx ──
         _inf = float('inf')
         lbw = ([-v_max_lin]*3 + [-v_max_ang]*3) * N + [0.0]*8
         ubw = ([ v_max_lin]*3 + [ v_max_ang]*3) * N + [_inf]*8
 
-        # ── Build solver ──────────────────────────────────────────────────
+        # ── Build solver (OSQP / ADMM) ────────────────────────────────────
+        # OSQP scales as O(N) per ADMM iteration vs O(N²) per active-set pivot
+        # for qpOASES.  polish=True adds a post-solve refinement step that
+        # recovers exact constraint satisfaction (important for CBF guarantees).
         g_expr = ca.vertcat(*g_list)
         nlp    = {'x': w, 'f': cost, 'g': g_expr, 'p': theta}
-        # nWSR caps active-set recalculations, bounding worst-case solve time.
-        opts = {'print_time': False, 'nWSR': 500}
-        self._solver = ca.qpsol('mpc_cbf_N%d' % N, 'qpoases', nlp, opts)
+        opts = {
+            'print_time': False,
+            'osqp': {
+                'verbose':              False,
+                'polish':               True,
+                'polish_refine_iter':   5,
+                # ADMM only needs to reach ~1e-4 to give polish a good
+                # starting point; 1e-7 caused MAX_ITER failures because the
+                # Hessian condition number (~70k from slack penalties) makes
+                # convergence slow at tight tolerances.
+                'eps_abs':              1e-4,
+                'eps_rel':              1e-4,
+                'max_iter':             4000,
+                'adaptive_rho':         True,
+                'check_termination':    10,
+            },
+        }
+        self._solver = ca.qpsol('mpc_cbf_N%d' % N, 'osqp', nlp, opts)
         self._n_u    = n_u
         self._lbg    = lbg
         self._ubg    = ubg
@@ -608,12 +623,29 @@ def main():
             # Current state vector
             x0 = np.concatenate([_pos, np.zeros(3), _vel])
 
-            # Reference trajectory: forward-integrate LPF command
+            # Reference trajectory: forward-integrate LPF command, clamped to
+            # the effective workspace.  Without clamping, a boundary-directed
+            # command produces a reference outside the safe set for every
+            # horizon step, creating conflicting objectives (tracking cost pulls
+            # out, CBF constraint pushes in) that cause chattering at the wall.
+            # Clamping makes the reference say "hold at the boundary with zero
+            # inward velocity" — the MPC then commands consistent deceleration
+            # to stop there (car-before-obstacle behaviour) instead of chattering.
             xr = x0.copy()
             xref_list = []
             for _ in range(_N + 1):
-                xref_list.append(xr)
-                xr = A_np @ xr + B_np @ _u_des
+                xref_list.append(xr.copy())
+                xr_next = A_np @ xr + B_np @ _u_des
+                for j in range(3):
+                    if xr_next[j] < p_min_eff[j]:
+                        xr_next[j] = p_min_eff[j]
+                        if xr_next[6 + j] < 0.0:
+                            xr_next[6 + j] = 0.0
+                    elif xr_next[j] > p_max_eff[j]:
+                        xr_next[j] = p_max_eff[j]
+                        if xr_next[6 + j] > 0.0:
+                            xr_next[6 + j] = 0.0
+                xr = xr_next
             x_ref_flat = np.concatenate(xref_list)
 
             # Parameter vector θ
