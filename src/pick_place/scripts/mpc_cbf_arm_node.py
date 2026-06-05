@@ -84,7 +84,7 @@ from dynamic_reconfigure.server import Server as DynReconfigureServer
 from kortex_driver.msg import TwistCommand, BaseCyclic_Feedback
 from pick_place.msg import NetworkQuality
 from pick_place.cfg import MpcCbfArmConfig
-from std_msgs.msg import Bool, Float32, Float64
+from std_msgs.msg import Bool, Float32, Float64, Int32
 from geometry_msgs.msg import Twist
 
 
@@ -463,6 +463,8 @@ def main():
         '/mpc_cbf_arm/safe_reference', Twist, queue_size=1)
     solve_time_pub = rospy.Publisher(
         '/mpc_cbf_arm/solve_time_ms', Float64, queue_size=10)
+    horizon_pub = rospy.Publisher(
+        '/mpc_cbf_arm/active_horizon', Int32, queue_size=10)
 
     # ── Dynamic reconfigure server ────────────────────────────────────────
     # Seed the parameter server with the values from the YAML file so that
@@ -636,6 +638,7 @@ def main():
             u0, slacks, ok = cur_solver.solve(theta_val)
             solve_time_pub.publish(Float64(
                 data=(time.perf_counter() - _t_solve_start) * 1e3))
+            horizon_pub.publish(Int32(data=_N))
 
             if not ok:
                 rospy.logwarn('[mpc_cbf_arm] Solver failed — clamped passthrough')
