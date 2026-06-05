@@ -26,8 +26,8 @@ s.t.
   CBF-workspace:  h_ws_i(k+1) >= (1-γ_ws)*h_ws_i(k) - s_ws_i   ∀i, ∀k
   CBF-speed:      h_sp(k+1)   >= (1-γ_sp)*h_sp(k)   - s_sp      ∀k
   CBF-accel:      h_ac(k)     >= (1-γ_ac)*h_ac(k-1) - s_ac      ∀k  (Constraint A)
-  s_ws_i ≥ 0,  s_sp ≥ 0,  s_ac ≥ 0             (slack non-negativity)
-  -v_max ≤ u_k ≤ v_max                          (hard velocity clamp)
+  s_ws_i ≥ 0,  s_sp ≥ 0,  s_ac ≥ 0             (variable lower bounds)
+  -v_max ≤ u_k ≤ v_max                          (variable bounds, not constraints)
 
 Safety functions
 ----------------
@@ -261,14 +261,6 @@ class MpcCbfSolver:
             g_list.append(h_ac_next - (1.0 - g_acc)*h_ac_k + sl_ac)
             lbg.append(0.0); ubg.append(float('inf'))
 
-            # ── Hard velocity box ─────────────────────────────────────────
-            for j in range(3):
-                g_list.append( uk[j] + v_max_lin); lbg.append(0.0); ubg.append(float('inf'))
-                g_list.append(-uk[j] + v_max_lin); lbg.append(0.0); ubg.append(float('inf'))
-            for j in range(3, 6):
-                g_list.append( uk[j] + v_max_ang); lbg.append(0.0); ubg.append(float('inf'))
-                g_list.append(-uk[j] + v_max_ang); lbg.append(0.0); ubg.append(float('inf'))
-
             # Advance
             h_ws_k = h_ws_next
             h_sp_k = h_sp_next
@@ -287,27 +279,31 @@ class MpcCbfSolver:
         cost += slack_pen_sp * sl_sp**2
         cost += slack_pen_ac * sl_ac**2
 
-        # ── Slack non-negativity ──────────────────────────────────────────
-        for i in range(6):
-            g_list.append(sl_ws[i]); lbg.append(0.0); ubg.append(float('inf'))
-        g_list.append(sl_sp); lbg.append(0.0); ubg.append(float('inf'))
-        g_list.append(sl_ac); lbg.append(0.0); ubg.append(float('inf'))
+        # ── Variable bounds — replaces 12*N box constraints + 8 slack non-neg ──
+        # Velocity box on U_flat: [-v_max_lin/ang, +v_max_lin/ang] per step.
+        # Slack lower bounds: 0 (non-negativity encoded as bounds, not constraints).
+        # qpOASES treats lbx/ubx via simple projection — no active-set pivots.
+        _inf = float('inf')
+        lbw = ([-v_max_lin]*3 + [-v_max_ang]*3) * N + [0.0]*8
+        ubw = ([ v_max_lin]*3 + [ v_max_ang]*3) * N + [_inf]*8
 
         # ── Build solver ──────────────────────────────────────────────────
         g_expr = ca.vertcat(*g_list)
         nlp    = {'x': w, 'f': cost, 'g': g_expr, 'p': theta}
-        # 'qpoases' is selected as 2nd arg to ca.qpsol — do NOT repeat it in opts.
-        # qpOASES-specific options (printLevel, nWSR, etc.) go at the top level.
-        opts = {'print_time': False}
+        # nWSR caps active-set recalculations, bounding worst-case solve time.
+        opts = {'print_time': False, 'nWSR': 500}
         self._solver = ca.qpsol('mpc_cbf_N%d' % N, 'qpoases', nlp, opts)
         self._n_u    = n_u
         self._lbg    = lbg
         self._ubg    = ubg
+        self._lbw    = np.array(lbw)
+        self._ubw    = np.array(ubw)
         self._n_p    = n_p
 
-        # Warm-start
-        self._w0   = np.zeros(n_dec)
-        self._lam0 = np.zeros(len(lbg))
+        # Warm-start (primal + dual for both constraints and bounds)
+        self._w0    = np.zeros(n_dec)
+        self._lam0  = np.zeros(len(lbg))
+        self._lamx0 = np.zeros(n_dec)
 
     def solve(self, theta_val: np.ndarray):
         """
@@ -316,11 +312,13 @@ class MpcCbfSolver:
         """
         try:
             res    = self._solver(
-                x0=self._w0, lam_g0=self._lam0,
-                p=theta_val, lbg=self._lbg, ubg=self._ubg)
+                x0=self._w0, lam_g0=self._lam0, lam_x0=self._lamx0,
+                p=theta_val, lbg=self._lbg, ubg=self._ubg,
+                lbx=self._lbw, ubx=self._ubw)
             w_opt  = np.array(res['x']).flatten()
-            self._w0   = w_opt
-            self._lam0 = np.array(res['lam_g']).flatten()
+            self._w0    = w_opt
+            self._lam0  = np.array(res['lam_g']).flatten()
+            self._lamx0 = np.array(res['lam_x']).flatten()
 
             u0    = w_opt[0:6]
             sl_ws = w_opt[self._n_u:self._n_u+6]
@@ -368,7 +366,7 @@ def main():
     def gp(name, default):
         return rospy.get_param('~' + name, default)
 
-    p_min_nom = np.array([gp('workspace_x_min', 0.2),
+    p_min_nom = np.array([gp('workspace_x_min', -0.47),
                           gp('workspace_y_min', -0.2),
                           gp('workspace_z_min',  0.01)])
     p_max_nom = np.array([gp('workspace_x_max',  0.99),
