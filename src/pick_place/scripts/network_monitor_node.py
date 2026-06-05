@@ -34,6 +34,7 @@ class NetworkMonitor:
         self._window: deque[float] = deque(maxlen=WINDOW_SIZE)
         self._last_rtt_time = None   # rospy.Time of last received sample
         self._start_time    = None   # rospy.Time of first received sample (loss denominator)
+        self._sample_times: deque   = deque()   # rospy.Time of each sample in rolling window
 
         self._pub = rospy.Publisher(
             '/network_quality', NetworkQuality, queue_size=5
@@ -53,8 +54,19 @@ class NetworkMonitor:
         rtt = float(msg.data)
         if rtt < 0:
             return  # ignore bogus values
+        now = rospy.Time.now()
+        # Reset the rolling window when recovering from a FAILED gap (first sample
+        # after a ≥ FAILED_TIMEOUT_S silence).  Without this, a brief connection
+        # drop would leave a residual loss tail in the 30-s window and cause the
+        # state to stay DEGRADED for up to 30 s even after full recovery.
+        if self._last_rtt_time is not None and \
+                (now - self._last_rtt_time).to_sec() >= FAILED_TIMEOUT_S:
+            self._window.clear()
+            self._sample_times.clear()
+            self._start_time = None
         self._window.append(rtt)
-        self._last_rtt_time = rospy.Time.now()
+        self._sample_times.append(now)
+        self._last_rtt_time = now
         if self._start_time is None:
             self._start_time = self._last_rtt_time
 
@@ -90,17 +102,21 @@ class NetworkMonitor:
         # 99th-percentile one-way delay = 99th-pct RTT / 2
         delta_max = float(np.percentile(arr, 99)) / 2.0
 
-        # ── Loss rate ──────────────────────────────────────────────────────
-        # Use wall-clock time since the first probe arrived as the denominator,
-        # capped at the rolling-window span (WINDOW_SIZE * PROBE_INTERVAL_S).
-        # This ensures that missing probes correctly increase the expected count
-        # rather than shrinking the window duration and cancelling themselves out.
+        # ── Loss rate (timestamp-based sliding window) ─────────────────────
+        # Count samples that actually arrived within the rolling window period.
+        # The old approach (1 - len(arr)/expected) was wrong: after 30 s the
+        # deque is always at maxlen=300, so loss_pct was perpetually 0 even
+        # when the injector was dropping packets.  Tracking arrival timestamps
+        # gives the correct sliding-window count regardless of deque fill state.
+        window_cutoff = now - rospy.Duration(WINDOW_SIZE * PROBE_INTERVAL_S)
+        while self._sample_times and self._sample_times[0] < window_cutoff:
+            self._sample_times.popleft()
         observation_s = min(
             (now - self._start_time).to_sec(),
             WINDOW_SIZE * PROBE_INTERVAL_S
         )
         expected  = max(1, observation_s / PROBE_INTERVAL_S)
-        loss_pct  = max(0.0, (1.0 - len(arr) / expected) * 100.0)
+        loss_pct  = max(0.0, (1.0 - len(self._sample_times) / expected) * 100.0)
 
         # ── State classification ───────────────────────────────────────────
         if delta_max < 80.0 and loss_pct < 1.0:

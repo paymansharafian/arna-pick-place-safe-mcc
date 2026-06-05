@@ -79,6 +79,18 @@ class NetworkWatchdog:
         self._arm_dr   = None
         self._base_dr  = None
 
+        # ── Background dynrec worker ──────────────────────────────────────────
+        # _apply_mode() can block for seconds on drc.Client() timeouts when the
+        # filter nodes are not running.  Running it on the ROS callback thread
+        # would starve _quality_cb and _tick_cb, causing spurious FAILED states.
+        # Solution: a single daemon thread processes dynrec updates; only the
+        # latest pending mode is kept so rapid transitions collapse to one call.
+        self._dynrec_pending = None
+        self._dynrec_cond    = threading.Condition()
+        self._dynrec_thread  = threading.Thread(
+            target=self._dynrec_worker, daemon=True, name='dynrec-worker')
+        self._dynrec_thread.start()
+
         # ── Publishers ────────────────────────────────────────────────────────
         self._mode_pub = rospy.Publisher('/safety_mode', String, queue_size=1, latch=True)
         self._lambda_network_pub = rospy.Publisher(
@@ -103,6 +115,18 @@ class NetworkWatchdog:
         self._mode_pub.publish(String(data='NOMINAL'))
         self._lambda_network_pub.publish(Float32(data=0.0))
         rospy.loginfo('[network_watchdog] Ready — monitoring /network_quality')
+
+    # ── Background dynrec worker ──────────────────────────────────────────────
+
+    def _dynrec_worker(self):
+        """Applies dynrec updates in background without blocking ROS callbacks."""
+        while not rospy.is_shutdown():
+            with self._dynrec_cond:
+                while self._dynrec_pending is None:
+                    self._dynrec_cond.wait(timeout=0.5)
+                mode = self._dynrec_pending
+                self._dynrec_pending = None
+            self._apply_mode(mode)
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -227,7 +251,12 @@ class NetworkWatchdog:
         elif new_mode == 'FAILED':
             rospy.logerr('[network_watchdog] → FAILED  (zero-velocity flood active)')
 
-        self._apply_mode(new_mode)
+        # Enqueue dynrec update — processed by background thread so this
+        # method returns immediately and never blocks the callback thread.
+        with self._dynrec_cond:
+            self._dynrec_pending = new_mode
+            self._dynrec_cond.notify()
+
         self._mode_pub.publish(String(data=new_mode))
         lam = MODE_TABLE[new_mode]['lambda_network']
         self._lambda_network_pub.publish(Float32(data=lam))

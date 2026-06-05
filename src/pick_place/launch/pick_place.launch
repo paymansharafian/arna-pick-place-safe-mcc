@@ -2,8 +2,8 @@
 <launch>
 
 <arg name="enable_network_monitor"  default="true" />
-  <arg name="enable_network_watchdog" default="true" />
-  <arg name="enable_operator_intent"  default="true" />
+<arg name="enable_network_watchdog" default="true" />
+<arg name="enable_operator_intent"  default="true" />
 
 <!-- Phase 1: MPC-CBF arm safety filter
      When true:  mpc_cbf_arm_node filters /my_gen3/in/cartesian_velocity_desired
