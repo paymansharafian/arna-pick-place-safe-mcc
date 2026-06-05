@@ -368,8 +368,8 @@ def main():
     def gp(name, default):
         return rospy.get_param('~' + name, default)
 
-    p_min_nom = np.array([gp('workspace_x_min', -0.46),
-                          gp('workspace_y_min', -0.37),
+    p_min_nom = np.array([gp('workspace_x_min', 0.2),
+                          gp('workspace_y_min', -0.2),
                           gp('workspace_z_min',  0.01)])
     p_max_nom = np.array([gp('workspace_x_max',  0.99),
                           gp('workspace_y_max',  0.99),

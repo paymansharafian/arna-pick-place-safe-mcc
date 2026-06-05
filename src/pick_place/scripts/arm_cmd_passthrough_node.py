@@ -10,6 +10,7 @@ at any time, ensuring no commands are silently dropped.
 
 import rospy
 from kortex_driver.msg import TwistCommand
+from std_msgs.msg import Bool
 
 
 def main():
@@ -18,9 +19,18 @@ def main():
     pub = rospy.Publisher(
         '/my_gen3/in/cartesian_velocity', TwistCommand, queue_size=1)
 
+    pick_running = False
+
+    def pick_cb(msg):
+        nonlocal pick_running
+        pick_running = msg.data
+
     def cb(msg):
+        if pick_running:
+            return   # suppress during ExecuteAction trajectories (homing/pick)
         pub.publish(msg)
 
+    rospy.Subscriber('/pick_running', Bool, pick_cb, queue_size=1)
     rospy.Subscriber(
         '/my_gen3/in/cartesian_velocity_desired', TwistCommand, cb,
         queue_size=1)
