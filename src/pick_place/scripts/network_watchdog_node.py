@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-network_watchdog_node — Phase 3 safety coordinator.
+network_watchdog_node — Layer 3 safety coordinator.
 
 Subscribes to /network_quality and transitions between four modes:
   NOMINAL  — normal operation, no overrides

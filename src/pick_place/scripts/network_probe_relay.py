@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-network_probe_relay — Phase 0 ping/pong relay node.
+network_probe_relay — Layer 0 ping/pong relay node.
 
 Subscribes to /network_probe_ping and immediately republishes each message
 verbatim on /network_probe_pong.  Runs on Legion so that the round-trip

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-arm_cmd_passthrough_node — Phase 1 bypass relay (enable_mpc_cbf:=false).
+arm_cmd_passthrough_node — Layer 1 bypass relay (enable_mpc_cbf:=false).
 
 Subscribes to /my_gen3/in/cartesian_velocity_desired and immediately
 republishes every message verbatim on /my_gen3/in/cartesian_velocity with

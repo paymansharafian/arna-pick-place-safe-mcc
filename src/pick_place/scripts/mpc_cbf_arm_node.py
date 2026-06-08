@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-mpc_cbf_arm_node — Phase 1 full MPC-CBF arm safety filter (CasADi/OSQP).
+mpc_cbf_arm_node — Layer 1 full MPC-CBF arm safety filter (CasADi/OSQP).
 
 System model
 ------------

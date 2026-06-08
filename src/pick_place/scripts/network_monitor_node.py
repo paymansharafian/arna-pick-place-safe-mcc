@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-network_monitor_node — Phase 0 network quality monitor.
+network_monitor_node — Layer 0 network quality monitor.
 
 Subscribes to /browser_rtt_ms (std_msgs/Float64) published by the frontend
 after each ping/pong round-trip.  Maintains a rolling window of 300 samples

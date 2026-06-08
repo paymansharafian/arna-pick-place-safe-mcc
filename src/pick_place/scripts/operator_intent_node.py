@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-operator_intent_node — Phase 4 operator-adaptive safety blending.
+operator_intent_node — Layer 4 operator-adaptive safety blending.
 
 Algorithm
 ---------
@@ -9,7 +9,7 @@ fraction of the robot's safe reference:
 
     u_H*(α)  =  α · u_R
 
-where  u_R  is the safe reference published by the Phase 1/2 CBF-QP
+where  u_R  is the safe reference published by the Layer 1/2 CBF-QP
 filters, and  u_H_obs  is the raw joystick command.
 
 Projected Gradient Descent (PGD) update (20 Hz):

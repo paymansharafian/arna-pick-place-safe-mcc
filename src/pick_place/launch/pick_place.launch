@@ -5,7 +5,7 @@
 <arg name="enable_network_watchdog" default="true" />
 <arg name="enable_operator_intent"  default="true" />
 
-<!-- Phase 1: MPC-CBF arm safety filter
+<!-- Layer 1: MPC-CBF arm safety filter
      When true:  mpc_cbf_arm_node filters /my_gen3/in/cartesian_velocity_desired
                  → /my_gen3/in/cartesian_velocity using full MPC-CBF with CasADi.
      When false: arm_cmd_passthrough_node relays the topic verbatim (zero processing).
@@ -39,7 +39,7 @@
 
 <node pkg="pick_place" type="main.py" name="pick_place" output="screen" />
 
-<!-- Phase 1: Arm velocity safety filter (exactly one branch active at all times) -->
+<!-- Layer 1: Arm velocity safety filter (exactly one branch active at all times) -->
 <group if="$(arg enable_mpc_cbf)">
     <node pkg="pick_place" type="mpc_cbf_arm_node.py"
           name="mpc_cbf_arm_node" >
@@ -54,7 +54,7 @@
           name="arm_cmd_passthrough_node" />
 </group>
 
-<!-- Phase 0: Network Quality Monitor
+<!-- Layer 0: Network Quality Monitor
      Disable with: roslaunch pick_place pick_place.launch enable_network_monitor:=false -->
 <group if="$(arg enable_network_monitor)">
     <!-- Relay: echos /network_probe_ping → /network_probe_pong so the browser
@@ -64,8 +64,8 @@
     <!-- Monitor: aggregates /browser_rtt_ms samples and publishes /network_quality -->
     <node pkg="pick_place" type="network_monitor_node.py"
           name="network_monitor_node" output="screen" />
-    <!-- Phase 3: Network watchdog — coordinates adaptive behaviour of
-         Phases 1 and 2 via dynamic_reconfigure on state transitions.
+    <!-- Layer 3: Network watchdog — coordinates adaptive behaviour of
+         Layers 1 and 2 via dynamic_reconfigure on state transitions.
          Disable with: roslaunch pick_place pick_place.launch enable_network_watchdog:=false -->
     <group if="$(arg enable_network_watchdog)">
         <node pkg="pick_place" type="network_watchdog_node.py"
@@ -73,7 +73,7 @@
     </group>
 </group>
 
-<!-- Phase 4: Operator intent — adaptive λ via scalar-α Boltzmann model + PGD.
+<!-- Layer 4: Operator intent — adaptive λ via scalar-α Boltzmann model + PGD.
      Disable with: roslaunch pick_place pick_place.launch enable_operator_intent:=false -->
 <group if="$(arg enable_operator_intent)">
     <node pkg="pick_place" type="operator_intent_node.py"

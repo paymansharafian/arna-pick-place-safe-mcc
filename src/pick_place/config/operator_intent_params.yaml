@@ -1,4 +1,4 @@
-# ── Phase 4: Operator Intent Parameters ─────────────────────────────────────
+# ── Layer 4: Operator Intent Parameters ─────────────────────────────────────
 # Loaded by pick_place.launch into operator_intent_node private namespace (~/).
 # All values can also be tuned live in rqt_reconfigure (dynamic_reconfigure).
 # Changes here take effect on next roslaunch — no need to edit the node.
