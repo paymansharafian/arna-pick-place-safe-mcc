@@ -1,37 +1,47 @@
-# ── Layer 4: Operator Intent Parameters ─────────────────────────────────────
+# ── Layer 4: Operator Intent Parameters (disagreement metric) ────────────────
 # Loaded by pick_place.launch into operator_intent_node private namespace (~/).
 # All values can also be tuned live in rqt_reconfigure (dynamic_reconfigure).
 # Changes here take effect on next roslaunch — no need to edit the node.
+#
+# Signal: D = normalized CBF-intervention magnitude, computed per subsystem:
+#   d_base = ||u_H_base - u_R_base|| / max(||u_H_base||, v_ref_base)
+#   d_arm  = ||u_H_arm  - u_R_arm||  / max(||u_H_arm||,  v_ref_arm)
+#   D_raw  = clip(max(d_base, d_arm) + w_dir*relu(-cos_active), 0, 1)
+#   D      = EMA(D_raw, ema_beta)
+#   lambda_op = lambda_op_min + (lambda_op_max - lambda_op_min) * D
+# D=0 → operator agrees with the safety filter; D=1 → operator is fighting it.
 
-# PGD (Projected Gradient Descent) ─────────────────────────────────────────
-# Learning rate μ for the normalized LMS alpha update:
-#   α ← clip(α − μ · dot(e, u_R) / ||u_R||², α_floor, 1−α_floor)
-# Typical convergence: ~0.5 s at 20 Hz with step_size = 0.10.
-# Increase for faster adaptation, decrease if alpha oscillates.
-pgd_step_size: 0.05
+# Smoothing ───────────────────────────────────────────────────────────────────
+# EMA factor on the raw disagreement. Lower = smoother/slower, higher = snappier.
+ema_beta: 0.2
 
-# Reserved — not used in the normalized LMS calculation. Keep at 0.01.
-pgd_gamma: 0.01
+# Normalization floors ────────────────────────────────────────────────────────
+# Per-subsystem reference speed (~0.1 * v_max) in the denominator. Prevents
+# divide-by-zero and noise blow-up when the command is tiny. Base v_max≈0.20 m/s,
+# arm v_max≈0.4 m/s.
+v_ref_base: 0.02
+v_ref_arm:  0.04
 
-# λ_operator = 1 − sigmoid(k · (α − 0.5))
-# Higher k → sharper transition around α = 0.5.
-sigmoid_sharpness: 8.0
+# Directional opposition weight ───────────────────────────────────────────────
+# Optional extra caution when the operator commands AGAINST the safe reference
+# (cos < 0 of the active subsystem). 0 disables it — the L2 norm already
+# penalizes direction, so keep at 0 unless you want opposition to snap to max.
+w_dir: 0.0
 
-# Clamp on λ_operator output.
-# lambda_op is always in [lambda_op_min, lambda_op_max].
+# Lambda mapping ───────────────────────────────────────────────────────────────
+# lambda_op is linear in D, clamped to [lambda_op_min, lambda_op_max].
+# min=0.1 keeps today's baseline caution in open space (D=0); lambda_op now rises
+# toward max as the operator fights the filter. Set min=0 for "no extra caution
+# when fully cooperative".
 lambda_op_min: 0.1
 lambda_op_max: 0.9
 
-# α is projected onto [alpha_floor, 1 − alpha_floor] after each PGD step.
-# Prevents α from saturating at 0 or 1 (keeps gradient informative).
-alpha_floor: 0.01
-
-# PGD update is skipped when ||u_R|| < excitation_thresh to avoid
-# gradient noise when the robot is not being commanded.
+# Excitation guard ─────────────────────────────────────────────────────────────
+# When ||u_H|| is below this on BOTH subsystems, the operator is not commanding,
+# so D_raw is forced to 0 (no disagreement).
 excitation_thresh: 0.01
 
-# Idle reset ────────────────────────────────────────────────────────────────
-# If no joystick input for idle_timeout_s seconds, α is reset to 0.5
-# (neutral — no prior assumption about operator intent).
+# Idle reset ────────────────────────────────────────────────────────────────────
+# If no command for idle_timeout_s seconds, D is reset to 0 (fully aligned).
 reset_on_idle: true
 idle_timeout_s: 5.0
