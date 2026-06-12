@@ -120,14 +120,18 @@ def execute_pick():
     q = tf_cam_base.transform.rotation
     R_cam_base = _Rotation.from_quat([q.x, q.y, q.z, q.w]).as_matrix()
 
-    # ── 3. Build candidate list (skip upward approaches, cap at GRASP_MAX_ATTEMPTS) ──
-    candidates = []
+    # ── 3. Build candidate list (skip upward, prefer top-down) ──────────────────
+    # Sort by approach_z ascending (most negative = most top-down first).
+    # Top-down candidates work with position-only moves; side approaches need
+    # an intermediate waypoint and are tried only after top-down options fail.
+    _cand_raw = []
     for i, g_cam in enumerate(grasps_cam):
-        if (R_cam_base @ g_cam[:3, 2])[2] > 0.5:
+        az = (R_cam_base @ g_cam[:3, 2])[2]
+        if az > 0.5:
             continue
-        candidates.append(i)
-        if len(candidates) >= GRASP_MAX_ATTEMPTS:
-            break
+        _cand_raw.append((i, az))
+    _cand_raw.sort(key=lambda x: x[1])   # most top-down first
+    candidates = [i for i, _ in _cand_raw[:GRASP_MAX_ATTEMPTS]]
     if not candidates:
         candidates = [0]
         print('[execute_pick] Warning: all grasps upward, falling back to index 0.')
@@ -171,6 +175,22 @@ def execute_pick():
               f'score={scores_cam[idx]:.3f}  '
               f'approach=[{approach_dir_base[0]:.2f},{approach_dir_base[1]:.2f},{approach_dir_base[2]:.2f}]  '
               f'pos_cam=[{g_cam[0,3]:.3f},{g_cam[1,3]:.3f},{g_cam[2,3]:.3f}]')
+
+        # Stage 0 (side approaches only): move to directly above the pre-grasp.
+        # A straight path from home to a side pre-grasp position often crosses
+        # a joint limit mid-trajectory (Kinova sub-error 140).  Descending
+        # vertically from above gives the planner a feasible two-step path.
+        is_top_down = approach_dir_base[2] < -0.7
+        if not is_top_down:
+            _above_pre = Point3D(
+                float(pre_target_position.x),
+                float(pre_target_position.y),
+                float(pre_target_position.z) + 0.15,
+            )
+            if not arm_set_position(_above_pre):
+                print(f'[execute_pick] Candidate {attempt}: Stage 0 (above pre-grasp) rejected — trying next.')
+                continue
+            print(f'[execute_pick] Candidate {attempt}: Stage 0 reached.')
 
         # Stage 1: position-only pre-grasp (keeps arm's current orientation)
         if not arm_set_position(pre_target_position):
