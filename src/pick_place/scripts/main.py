@@ -85,19 +85,37 @@ def execute_pick():
     starting_tool_position = get_frame_position("tool_frame", "base_link")
     starting_tool_rotation = get_frame_rotation_euler("tool_frame", "base_link")
 
+    def _finish_pick():
+        # Single cleanup path for both success and abort: drop the mask/overlay
+        # and release the pick-running latch so the safety layers resume.
+        global mask, mouse_click_point, executing_pick
+        mask = None
+        mouse_click_point = None          # clear the blue dot overlay
+        pick_running_pub.publish(False)
+        pick_ready_pub.publish(False)
+        executing_pick = False
+
+    def _abort_to_start():
+        # Best-effort: return the arm to where the pick began, then clean up.
+        try:
+            arm_set_pose(starting_tool_position, starting_tool_rotation)
+        except Exception as e:
+            print('[execute_pick] return-to-start during abort failed: %s' % e)
+        _finish_pick()
+
     # ── 1. Get all grasp candidates from Contact-GraspNet ────────────────────
     grasps_cam, scores_cam = get_all_grasps(mask, depth, color_info)
 
     if grasps_cam is None:
         print('[execute_pick] No grasps found – aborting.')
-        executing_pick = False
+        _finish_pick()
         return
 
     # ── 2. Get TF rotation camera_color_frame → base_link as numpy 3x3 ───────
     tf_cam_base = transform_frames("camera_color_frame", "base_link")
     if tf_cam_base is None:
         print('[execute_pick] TF lookup failed – aborting.')
-        executing_pick = False
+        _finish_pick()
         return
     q = tf_cam_base.transform.rotation
     R_cam_base = _Rotation.from_quat([q.x, q.y, q.z, q.w]).as_matrix()
@@ -143,7 +161,7 @@ def execute_pick():
 
     if target_position is None or target_orientation is None:
         print('[execute_pick] TF transform failed – aborting.')
-        executing_pick = False
+        _finish_pick()
         return
 
     # Pre-grasp position: GRASP_STANDOFF_M back from the corrected grasp position
@@ -168,7 +186,10 @@ def execute_pick():
     # Moving position while keeping the current orientation maximises IK
     # success because the arm only needs to solve for XYZ, not for a full
     # reorientation at the same time.
-    arm_set_position(pre_target_position)
+    if not arm_set_position(pre_target_position):
+        print('[execute_pick] Stage 1 FAILED: pre-grasp move did not complete — aborting pick.')
+        _abort_to_start()
+        return
     print('[execute_pick] Stage 1: pre-grasp position reached')
 
     # ── Closed-loop refinement ────────────────────────────────────────────────
@@ -241,11 +262,17 @@ def execute_pick():
     # ── Stage 2: rotate to grasp orientation in place ─────────────────────────
     # Now that we are at the right spatial location the shoulder/elbow
     # configuration is already correct and a pure wrist rotation is enough.
-    arm_set_rotation(target_orientation)
+    if not arm_set_rotation(target_orientation):
+        print('[execute_pick] Stage 2 FAILED: orientation move rejected — aborting pick.')
+        _abort_to_start()
+        return
     print('[execute_pick] Stage 2: grasp orientation set')
 
     # ── Stage 3: advance along approach axis to final grasp position ──────────
-    arm_set_position(grasp_position)
+    if not arm_set_position(grasp_position):
+        print('[execute_pick] Stage 3 FAILED: advance to grasp rejected — aborting pick.')
+        _abort_to_start()
+        return
     print('[execute_pick] Stage 3: at grasp position')
 
     # ── Stage 4: close gripper ────────────────────────────────────────────────
@@ -255,10 +282,7 @@ def execute_pick():
     arm_set_pose(starting_tool_position, starting_tool_rotation)
     print('[execute_pick] Returned to start')
 
-    mask = None
-    mouse_click_point = None   # clear the blue dot overlay on the camera feed
-    pick_running_pub.publish(False)
-    executing_pick = False
+    _finish_pick()
 
 
 def frame_cb(_color, _depth, _color_info, _depth_info):

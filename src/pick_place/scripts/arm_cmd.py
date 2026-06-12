@@ -10,6 +10,7 @@ from kortex_driver.srv import StopAction
 
 import rospy
 import actionlib
+from actionlib_msgs.msg import GoalStatus
 
 from transform import *
 
@@ -32,8 +33,16 @@ def arm_tool_rotation():
     return get_frame_rotation_euler("tool_frame", "base_link")
 
 def arm_set_pose(position: Point3D, orientation: Point3D):
+    """Send a single-waypoint Cartesian trajectory and WAIT for it.
+
+    Returns True only if the arm controller reported the goal SUCCEEDED.
+    A returned False means the trajectory was aborted (e.g. Kinova sub-error
+    140, CONTROL_WAYPOINT_TRAJECTORY_ABORTED) or rejected (e.g. waypoint
+    outside the robot workspace). Callers MUST treat False as a failed stage
+    and abort — never silently continue from a wrong pose.
+    """
     if (rospy.is_shutdown()):
-        return
+        return False
 
     print("Moving arm")
 
@@ -41,31 +50,46 @@ def arm_set_pose(position: Point3D, orientation: Point3D):
     goal.trajectory.append(CartesianWaypoint(CartesianPose(position.x, position.y, position.z, orientation.x, orientation.y, orientation.z), 0, 0.1, 20, 0))
     goal.use_optimal_blending = True
 
-    trajectory_action.send_goal_and_wait(goal, rospy.Duration(10), rospy.Duration(10))
-    print("Arm moved")
+    state = trajectory_action.send_goal_and_wait(goal, rospy.Duration(10), rospy.Duration(10))
+    result = trajectory_action.get_result()
+
+    ok = (state == GoalStatus.SUCCEEDED)
+    if ok and result is not None and hasattr(result, 'error_code'):
+        ok = (result.error_code == 0)
+
+    if ok:
+        print("Arm moved")
+    else:
+        err = getattr(result, 'error_code', None)
+        errstr = getattr(result, 'error_string', '')
+        rospy.logerr("[arm_cmd] Arm move FAILED: state=%s error_code=%s %s"
+                     % (state, err, errstr))
+        print("Arm move FAILED")
+
     rospy.sleep(0.1)
+    return ok
 
 def arm_translate(offset: Point3D):
     position = arm_tool_position()
-    arm_set_pose(Point3D(position.x + offset.x, position.y + offset.y, position.z + offset.z), get_frame_rotation_euler("tool_frame", "base_link"))
+    return arm_set_pose(Point3D(position.x + offset.x, position.y + offset.y, position.z + offset.z), get_frame_rotation_euler("tool_frame", "base_link"))
 
 def arm_rotate(offset: Point3D):
     rotation = arm_tool_rotation()
-    arm_set_pose(arm_tool_position(), Point3D(rotation.x + offset.x, rotation.y + offset.y, rotation.z + offset.z))
+    return arm_set_pose(arm_tool_position(), Point3D(rotation.x + offset.x, rotation.y + offset.y, rotation.z + offset.z))
 
 def arm_rotate_tool(offset: Point3D):
     local_offset = transform_pyrotation(offset, "tool_frame", "base_link")
-    arm_set_rotation(local_offset)
+    return arm_set_rotation(local_offset)
 
 def arm_translate_tool(offset: Point3D):
     local_offset = transform_pypoint(offset, "tool_frame", "base_link")
-    arm_set_position(local_offset)
+    return arm_set_position(local_offset)
 
 def arm_set_position(position: Point3D):
-    arm_set_pose(position, arm_tool_rotation())
+    return arm_set_pose(position, arm_tool_rotation())
 
 def arm_set_rotation(rotation: Point3D):
-    arm_set_pose(arm_tool_position(), rotation)
+    return arm_set_pose(arm_tool_position(), rotation)
 
 def grip(amount):
     grip_srv(GripperCommand(3, Gripper([Finger(0, amount)]), 0))
