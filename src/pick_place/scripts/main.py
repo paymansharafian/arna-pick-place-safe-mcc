@@ -136,10 +136,14 @@ def execute_pick():
     grip(0)
 
     # ── 5. Candidate loop ─────────────────────────────────────────────────────
-    # Approach A: Stage 1 moves to pre-grasp position WITH the target orientation
-    # in a single combined command.  The Kinova IK planner solves for both
-    # simultaneously, eliminating the in-place rotation that caused workspace
-    # rejections.  On any stage failure, try the next candidate.
+    # We use GraspNet exclusively for POSITION (where to place the gripper).
+    # Orientation is kept as-is: the arm moves position-only throughout.
+    # Reason: the Kinova Gen3's Cartesian controller rejects combined
+    # position+orientation goals for straight-down approaches at table height
+    # regardless of the IK configuration — a kinematic workspace constraint
+    # that is separate from the arm's physical reach.  The Robotiq 2F adaptive
+    # gripper closes reliably in the arm's natural approach orientation, so
+    # orientation accuracy is not required for table-top picks.
     for attempt, idx in enumerate(candidates):
         g_cam = grasps_cam[idx]
         approach_dir_base = R_cam_base @ g_cam[:3, 2]
@@ -147,12 +151,8 @@ def execute_pick():
         target_position = transform_pypoint(
             tuple(g_cam[:3, 3].tolist()), "camera_color_frame", "base_link"
         )
-        euler_cam = _Rotation.from_matrix(g_cam[:3, :3]).as_euler('xyz')
-        target_orientation = transform_pyrotation(
-            Point3D(*euler_cam.tolist()), "camera_color_frame", "base_link"
-        )
 
-        if target_position is None or target_orientation is None:
+        if target_position is None:
             print(f'[execute_pick] Candidate {attempt} (idx={idx}): TF failed, skipping.')
             continue
 
@@ -172,15 +172,13 @@ def execute_pick():
               f'approach=[{approach_dir_base[0]:.2f},{approach_dir_base[1]:.2f},{approach_dir_base[2]:.2f}]  '
               f'pos_cam=[{g_cam[0,3]:.3f},{g_cam[1,3]:.3f},{g_cam[2,3]:.3f}]')
 
-        # Stage 1: move to pre-grasp pose (position + orientation in one command)
-        if not arm_set_pose(pre_target_position, target_orientation):
+        # Stage 1: position-only pre-grasp (keeps arm's current orientation)
+        if not arm_set_position(pre_target_position):
             print(f'[execute_pick] Candidate {attempt}: Stage 1 rejected — trying next.')
             continue
         print(f'[execute_pick] Candidate {attempt}: Stage 1 reached.')
 
         # ── Closed-loop refinement ────────────────────────────────────────────
-        # With Approach A, Stage 1 already aligns the camera toward the object,
-        # so the projection is more likely to succeed than before.
         rospy.sleep(0.3)  # let arm settle and receive a fresh camera frame
 
         _tf2 = transform_frames("camera_color_frame", "base_link")
@@ -217,22 +215,19 @@ def execute_pick():
                     _rg = _new_grasps[_ridx]
                     _ra = R_cam_base @ _rg[:3, 2]
                     _rp = transform_pypoint(tuple(_rg[:3, 3].tolist()), "camera_color_frame", "base_link")
-                    _re = _Rotation.from_matrix(_rg[:3, :3]).as_euler('xyz')
-                    _ro = transform_pyrotation(Point3D(*_re.tolist()), "camera_color_frame", "base_link")
-                    if _rp is not None and _ro is not None:
-                        target_position    = _rp
-                        target_orientation = _ro
-                        approach_dir_base  = _ra
+                    if _rp is not None:
+                        target_position   = _rp
+                        approach_dir_base = _ra
                         grasp_position = Point3D(
                             float(_rp.x) + _ra[0] * GRASP_DEPTH_OFFSET_M,
                             float(_rp.y) + _ra[1] * GRASP_DEPTH_OFFSET_M,
                             float(_rp.z) + _ra[2] * GRASP_DEPTH_OFFSET_M,
                         )
-                        print(f'[execute_pick] Refinement updated grasp: '
+                        print(f'[execute_pick] Refinement updated position: '
                               f'confidence={_new_scores[_ridx]:.3f}  '
                               f'approach=[{_ra[0]:.2f},{_ra[1]:.2f},{_ra[2]:.2f}]')
                     else:
-                        print('[execute_pick] Refinement: TF failed, keeping original grasp.')
+                        print('[execute_pick] Refinement: TF failed, keeping original.')
                 else:
                     print('[execute_pick] Refinement: no grasps found, keeping original.')
             else:
@@ -240,8 +235,8 @@ def execute_pick():
         else:
             print('[execute_pick] Refinement: skipped (no frame or object behind camera).')
 
-        # Stage 2: advance to grasp position (orientation already set in Stage 1)
-        if not arm_set_pose(grasp_position, target_orientation):
+        # Stage 2: advance to grasp position (position-only, keeps current orientation)
+        if not arm_set_position(grasp_position):
             print(f'[execute_pick] Candidate {attempt}: Stage 2 rejected — returning to start and trying next.')
             try:
                 arm_set_pose(starting_tool_position, starting_tool_rotation)
