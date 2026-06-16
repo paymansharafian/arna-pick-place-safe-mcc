@@ -85,6 +85,16 @@ def execute_pick():
     pick_ready_pub.publish(False)
     pick_running_pub.publish(True)
 
+    # Home the arm before every pick so the Cartesian planner always starts
+    # from a known joint configuration.  Skipping this causes sub-error 140
+    # (mid-trajectory abort) when a previous run leaves the arm in a non-home
+    # pose — Cartesian paths planned from arbitrary starting configurations
+    # can silently cross joint limits that don't show up in the static check.
+    # arm_home() uses the joint-space controller and bypasses the Cartesian
+    # workspace constraint, so it succeeds even when Cartesian moves fail.
+    arm_home()
+    rospy.sleep(7)   # Gen3 reaches home from any pose in ≤5 s; 7 s is safe
+
     starting_tool_position = get_frame_position("tool_frame", "base_link")
     starting_tool_rotation = get_frame_rotation_euler("tool_frame", "base_link")
 
