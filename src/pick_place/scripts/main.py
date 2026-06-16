@@ -27,11 +27,11 @@ from grasp_net import get_best_grasp, get_all_grasps, load_model
 # object.  The Kinova Robotiq fingers are shorter, so we push the wrist
 # forward by GRASP_DEPTH_OFFSET_M to compensate.  Increase this value if
 # the arm still stops short; decrease it if it pushes too hard into the object.
-GRASP_DEPTH_OFFSET_M = 0.095   # metres – tunable
+GRASP_DEPTH_OFFSET_M = 0.95   # metres – tunable
 
 # Stand-off distance for Stage-1 (pre-grasp approach).
 # Must be > GRASP_DEPTH_OFFSET_M so pre-grasp is always behind the object.
-GRASP_STANDOFF_M = 0.15       # metres – tunable
+GRASP_STANDOFF_M = 0.14       # metres – tunable
 
 # Maximum number of GraspNet candidates to attempt before giving up.
 GRASP_MAX_ATTEMPTS = 5
@@ -42,7 +42,7 @@ GRASP_MAX_ATTEMPTS = 5
 # instantly, so without this wait the arm rises before the fingers have closed
 # and the object is left behind.  (The old streaming controller's ~1 s startup
 # lag used to mask this.)  Tunable — increase if the gripper still rises early.
-GRIP_CLOSE_WAIT_S = 2.0
+GRIP_CLOSE_WAIT_S = 1.0
 
 # output publishers
 image_pub = rospy.Publisher('pick_place_cam', Image, queue_size=1)

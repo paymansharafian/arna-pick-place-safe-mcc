@@ -98,12 +98,6 @@ def _get_measured_pose():
         rospy.logerr("[arm_cmd] get_measured_cartesian_pose failed: %s" % e)
         return None
 
-def _dist3(a, b):
-    """Euclidean distance between two Point3D-like objects (metres)."""
-    return ((float(a.x) - float(b.x)) ** 2
-            + (float(a.y) - float(b.y)) ** 2
-            + (float(a.z) - float(b.z)) ** 2) ** 0.5
-
 # Cartesian translation speed cap for REACH_POSE moves (m/s).  Matches the
 # 0.1 m/s the old streaming waypoint used — safe for table-top approach.
 REACH_SPEED_M_S = 0.10
@@ -167,49 +161,33 @@ def arm_set_position(position: Point3D, timeout: float = 15.0, tol: float = 0.01
     print("Moving arm (reach_pose)")
     execute_action(req)
 
-    # Wait until the arm has ARRIVED AND STOPPED at the target — do NOT return
-    # while it is still moving.  Returning on first entry into the tolerance
-    # sphere left the arm still descending the last ~cm, so the next stage
-    # (gripper close) ran before the arm finished its move.  We poll tf
-    # tool_frame (the frame the target is expressed in) and require the tool to
-    # hold still within tolerance for SETTLE_S before declaring the move done.
-    SETTLE_S = 0.4      # tool must be motionless this long to count as arrived
-    STILL_M  = 0.002    # per-poll motion below this = "not moving" (2 mm)
-    SANITY_M = 0.05     # settled farther than this from target = failed move
-
-    deadline    = rospy.Time.now() + rospy.Duration(timeout)
-    rate        = rospy.Rate(20)
-    prev        = tf_now
-    moved       = False
-    still_since = None
-    last_d      = _dist3(tf_now, position)
+    # Wait for convergence by polling the tool frame in tf (same frame the
+    # target is expressed in, so convergence is meaningful regardless of the
+    # firmware's internal tool reference).  Bail early if the arm stalls.
+    deadline = rospy.Time.now() + rospy.Duration(timeout)
+    rate     = rospy.Rate(20)
+    best_d   = None
+    best_t   = rospy.Time.now()
     while not rospy.is_shutdown() and rospy.Time.now() < deadline:
-        rate.sleep()
         cur = get_frame_position("tool_frame", "base_link")
-        if cur is None:
-            continue
-        last_d = _dist3(cur, position)
-        step   = _dist3(cur, prev)
-        prev   = cur
-        if _dist3(cur, tf_now) > 0.005:
-            moved = True
-        if step < STILL_M:                       # tool is (momentarily) still
-            if still_since is None:
-                still_since = rospy.Time.now()
-            elif (moved or last_d <= tol) and \
-                 (rospy.Time.now() - still_since).to_sec() >= SETTLE_S:
-                if last_d <= max(tol, SANITY_M):
-                    print("Arm moved (reach_pose)  resid=%.0fmm" % (last_d * 1000))
-                    return True
-                rospy.logerr("[arm_cmd] reach_pose: settled %.0fmm from target — move failed"
-                             % (last_d * 1000))
+        if cur is not None:
+            d = ((float(cur.x) - float(position.x)) ** 2
+                 + (float(cur.y) - float(position.y)) ** 2
+                 + (float(cur.z) - float(position.z)) ** 2) ** 0.5
+            if d <= tol:
+                print("Arm moved (reach_pose)")
+                rospy.sleep(0.1)
+                return True
+            if best_d is None or d < best_d - 0.002:
+                best_d, best_t = d, rospy.Time.now()
+            elif best_d > 0.03 and (rospy.Time.now() - best_t).to_sec() > 3.0:
+                rospy.logerr("[arm_cmd] reach_pose: stalled %.3fm from target — aborting move" % best_d)
                 print("Arm move FAILED")
                 return False
-        else:                                    # still in motion → reset timer
-            still_since = None
+        rate.sleep()
 
-    rospy.logerr("[arm_cmd] reach_pose: did not settle within %.1fs (last dist=%.0fmm)"
-                 % (timeout, last_d * 1000))
+    rospy.logerr("[arm_cmd] reach_pose: did not converge within %.1fs (best dist=%s)"
+                 % (timeout, best_d))
     print("Arm move FAILED")
     return False
 
