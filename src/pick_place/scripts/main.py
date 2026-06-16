@@ -36,6 +36,14 @@ GRASP_STANDOFF_M = 0.15       # metres – tunable
 # Maximum number of GraspNet candidates to attempt before giving up.
 GRASP_MAX_ATTEMPTS = 5
 
+# Seconds to wait after commanding the gripper closed before lifting.  grip(1)
+# is an async service call; in position mode the Robotiq 2F-85 closes until it
+# meets the object (~1 s) and holds.  The onboard reach_pose lift starts almost
+# instantly, so without this wait the arm rises before the fingers have closed
+# and the object is left behind.  (The old streaming controller's ~1 s startup
+# lag used to mask this.)  Tunable — increase if the gripper still rises early.
+GRIP_CLOSE_WAIT_S = 2.0
+
 # output publishers
 image_pub = rospy.Publisher('pick_place_cam', Image, queue_size=1)
 image_compressed_pub = rospy.Publisher('pick_place_cam/compressed', CompressedImage, queue_size=1)
@@ -265,8 +273,10 @@ def execute_pick():
             continue
         print(f'[execute_pick] Candidate {attempt}: Stage 2 reached — gripping.')
 
-        # Stage 3: close gripper
+        # Stage 3: close gripper — WAIT for the fingers to finish closing on
+        # the object before lifting (grip() is async; the lift starts instantly).
         grip(1)
+        rospy.sleep(GRIP_CLOSE_WAIT_S)
 
         # Stage 4: return to starting pose
         arm_set_position(starting_tool_position)
