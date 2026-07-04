@@ -147,7 +147,7 @@ def execute_pick():
     # ── 4. Open gripper ───────────────────────────────────────────────────────
     grip(0)
 
-    # ── 5. Candidate loop ─────────────────────────────────────────────────────
+    # ── 5. Execute the SINGLE best candidate (one-shot) ───────────────────────
     # We use GraspNet exclusively for POSITION (where to place the gripper).
     # Orientation is kept as-is: the arm moves position-only throughout.
     # Reason: the Kinova Gen3's Cartesian controller rejects combined
@@ -156,138 +156,141 @@ def execute_pick():
     # that is separate from the arm's physical reach.  The Robotiq 2F adaptive
     # gripper closes reliably in the arm's natural approach orientation, so
     # orientation accuracy is not required for table-top picks.
-    for attempt, idx in enumerate(candidates):
-        g_cam = grasps_cam[idx]
-        approach_dir_base = R_cam_base @ g_cam[:3, 2]
+    #
+    # One-shot policy: we attempt ONLY the highest-ranked (most top-down)
+    # candidate.  If any stage fails — usually because the grasp is out of reach
+    # from where the arm currently is — we return to the starting pose and stop.
+    # The operator can then drive the base/arm closer and click again.  We
+    # deliberately do NOT fall through to lower-scored candidates; retrying every
+    # candidate only adds time per pick.
+    idx = candidates[0]
+    g_cam = grasps_cam[idx]
+    approach_dir_base = R_cam_base @ g_cam[:3, 2]
 
-        target_position = transform_pypoint(
-            tuple(g_cam[:3, 3].tolist()), "camera_color_frame", "base_link"
-        )
+    target_position = transform_pypoint(
+        tuple(g_cam[:3, 3].tolist()), "camera_color_frame", "base_link"
+    )
 
-        if target_position is None:
-            print(f'[execute_pick] Candidate {attempt} (idx={idx}): TF failed, skipping.')
-            continue
-
-        grasp_position = Point3D(
-            float(target_position.x) + approach_dir_base[0] * GRASP_DEPTH_OFFSET_M,
-            float(target_position.y) + approach_dir_base[1] * GRASP_DEPTH_OFFSET_M,
-            float(target_position.z) + approach_dir_base[2] * GRASP_DEPTH_OFFSET_M,
-        )
-        pre_target_position = Point3D(
-            float(target_position.x) - approach_dir_base[0] * GRASP_STANDOFF_M,
-            float(target_position.y) - approach_dir_base[1] * GRASP_STANDOFF_M,
-            float(target_position.z) - approach_dir_base[2] * GRASP_STANDOFF_M,
-        )
-
-        print(f'[execute_pick] Candidate {attempt} (idx={idx}): '
-              f'score={scores_cam[idx]:.3f}  '
-              f'approach=[{approach_dir_base[0]:.2f},{approach_dir_base[1]:.2f},{approach_dir_base[2]:.2f}]  '
-              f'pos_cam=[{g_cam[0,3]:.3f},{g_cam[1,3]:.3f},{g_cam[2,3]:.3f}]')
-
-        # Stage 0 (side approaches only): move to directly above the pre-grasp.
-        # A straight path from home to a side pre-grasp position often crosses
-        # a joint limit mid-trajectory (Kinova sub-error 140).  Descending
-        # vertically from above gives the planner a feasible two-step path.
-        is_top_down = approach_dir_base[2] < -0.7
-        if not is_top_down:
-            _above_pre = Point3D(
-                float(pre_target_position.x),
-                float(pre_target_position.y),
-                float(pre_target_position.z) + 0.15,
-            )
-            if not arm_set_position(_above_pre):
-                print(f'[execute_pick] Candidate {attempt}: Stage 0 (above pre-grasp) rejected — trying next.')
-                continue
-            print(f'[execute_pick] Candidate {attempt}: Stage 0 reached.')
-
-        # Stage 1: position-only pre-grasp (keeps arm's current orientation)
-        if not arm_set_position(pre_target_position):
-            print(f'[execute_pick] Candidate {attempt}: Stage 1 rejected — trying next.')
-            continue
-        print(f'[execute_pick] Candidate {attempt}: Stage 1 reached.')
-
-        # ── Closed-loop refinement ────────────────────────────────────────────
-        rospy.sleep(0.3)  # let arm settle and receive a fresh camera frame
-
-        _tf2 = transform_frames("camera_color_frame", "base_link")
-        if _tf2 is not None:
-            _q2 = _tf2.transform.rotation
-            R_cam_base = _Rotation.from_quat([_q2.x, _q2.y, _q2.z, _q2.w]).as_matrix()
-
-        _obj_in_cam = transform_pypoint(
-            (float(target_position.x), float(target_position.y), float(target_position.z)),
-            "base_link", "camera_color_frame"
-        )
-        _ref_color = color
-        _ref_depth = depth
-        _ref_info  = color_info
-        if (_obj_in_cam is not None and _obj_in_cam.z > 0
-                and _ref_color is not None and _ref_depth is not None):
-            _fx = _ref_info.K[0]; _cx = _ref_info.K[2]
-            _fy = _ref_info.K[4]; _cy = _ref_info.K[5]
-            _u = int(_fx * _obj_in_cam.x / _obj_in_cam.z + _cx)
-            _v = int(_fy * _obj_in_cam.y / _obj_in_cam.z + _cy)
-            _h, _w = _ref_color.shape[:2]
-            if 0 <= _u < _w and 0 <= _v < _h:
-                _new_mask = segment_image((_u, _v), _ref_color)
-                _new_grasps, _new_scores = get_all_grasps(_new_mask, _ref_depth, _ref_info)
-                if _new_grasps is not None:
-                    _ridx = None
-                    for _i, _g in enumerate(_new_grasps):
-                        if (R_cam_base @ _g[:3, 2])[2] > 0.5:
-                            continue
-                        _ridx = _i
-                        break
-                    if _ridx is None:
-                        _ridx = 0
-                    _rg = _new_grasps[_ridx]
-                    _ra = R_cam_base @ _rg[:3, 2]
-                    _rp = transform_pypoint(tuple(_rg[:3, 3].tolist()), "camera_color_frame", "base_link")
-                    if _rp is not None:
-                        target_position   = _rp
-                        approach_dir_base = _ra
-                        grasp_position = Point3D(
-                            float(_rp.x) + _ra[0] * GRASP_DEPTH_OFFSET_M,
-                            float(_rp.y) + _ra[1] * GRASP_DEPTH_OFFSET_M,
-                            float(_rp.z) + _ra[2] * GRASP_DEPTH_OFFSET_M,
-                        )
-                        print(f'[execute_pick] Refinement updated position: '
-                              f'confidence={_new_scores[_ridx]:.3f}  '
-                              f'approach=[{_ra[0]:.2f},{_ra[1]:.2f},{_ra[2]:.2f}]')
-                    else:
-                        print('[execute_pick] Refinement: TF failed, keeping original.')
-                else:
-                    print('[execute_pick] Refinement: no grasps found, keeping original.')
-            else:
-                print('[execute_pick] Refinement: projected point out of frame, keeping original.')
-        else:
-            print('[execute_pick] Refinement: skipped (no frame or object behind camera).')
-
-        # Stage 2: advance to grasp position (position-only, keeps current orientation)
-        if not arm_set_position(grasp_position):
-            print(f'[execute_pick] Candidate {attempt}: Stage 2 rejected — returning to start and trying next.')
-            try:
-                arm_set_position(starting_tool_position)
-            except Exception as e:
-                print('[execute_pick] return-to-start failed: %s' % e)
-            continue
-        print(f'[execute_pick] Candidate {attempt}: Stage 2 reached — gripping.')
-
-        # Stage 3: close gripper — WAIT for the fingers to finish closing on
-        # the object before lifting (grip() is async; the lift starts instantly).
-        grip(1)
-        rospy.sleep(GRIP_CLOSE_WAIT_S)
-
-        # Stage 4: return to starting pose
-        arm_set_position(starting_tool_position)
-        print('[execute_pick] Returned to start')
-
-        _finish_pick()
+    if target_position is None:
+        print('[execute_pick] Best candidate: TF failed — move closer and click again.')
+        _abort_to_start()
         return
 
-    # All candidates failed
-    print('[execute_pick] All candidates failed — aborting pick.')
-    _abort_to_start()
+    grasp_position = Point3D(
+        float(target_position.x) + approach_dir_base[0] * GRASP_DEPTH_OFFSET_M,
+        float(target_position.y) + approach_dir_base[1] * GRASP_DEPTH_OFFSET_M,
+        float(target_position.z) + approach_dir_base[2] * GRASP_DEPTH_OFFSET_M,
+    )
+    pre_target_position = Point3D(
+        float(target_position.x) - approach_dir_base[0] * GRASP_STANDOFF_M,
+        float(target_position.y) - approach_dir_base[1] * GRASP_STANDOFF_M,
+        float(target_position.z) - approach_dir_base[2] * GRASP_STANDOFF_M,
+    )
+
+    print(f'[execute_pick] Best candidate (idx={idx}): '
+          f'score={scores_cam[idx]:.3f}  '
+          f'approach=[{approach_dir_base[0]:.2f},{approach_dir_base[1]:.2f},{approach_dir_base[2]:.2f}]  '
+          f'pos_cam=[{g_cam[0,3]:.3f},{g_cam[1,3]:.3f},{g_cam[2,3]:.3f}]')
+
+    # Stage 0 (side approaches only): move to directly above the pre-grasp.
+    # A straight path from home to a side pre-grasp position often crosses
+    # a joint limit mid-trajectory (Kinova sub-error 140).  Descending
+    # vertically from above gives the planner a feasible two-step path.
+    is_top_down = approach_dir_base[2] < -0.7
+    if not is_top_down:
+        _above_pre = Point3D(
+            float(pre_target_position.x),
+            float(pre_target_position.y),
+            float(pre_target_position.z) + 0.15,
+        )
+        if not arm_set_position(_above_pre):
+            print('[execute_pick] Stage 0 (above pre-grasp) failed — move closer and click again.')
+            _abort_to_start()
+            return
+        print('[execute_pick] Stage 0 reached.')
+
+    # Stage 1: position-only pre-grasp (keeps arm's current orientation)
+    if not arm_set_position(pre_target_position):
+        print('[execute_pick] Stage 1 (pre-grasp) failed — move closer and click again.')
+        _abort_to_start()
+        return
+    print('[execute_pick] Stage 1 reached.')
+
+    # ── Closed-loop refinement ────────────────────────────────────────────
+    rospy.sleep(0.3)  # let arm settle and receive a fresh camera frame
+
+    _tf2 = transform_frames("camera_color_frame", "base_link")
+    if _tf2 is not None:
+        _q2 = _tf2.transform.rotation
+        R_cam_base = _Rotation.from_quat([_q2.x, _q2.y, _q2.z, _q2.w]).as_matrix()
+
+    _obj_in_cam = transform_pypoint(
+        (float(target_position.x), float(target_position.y), float(target_position.z)),
+        "base_link", "camera_color_frame"
+    )
+    _ref_color = color
+    _ref_depth = depth
+    _ref_info  = color_info
+    if (_obj_in_cam is not None and _obj_in_cam.z > 0
+            and _ref_color is not None and _ref_depth is not None):
+        _fx = _ref_info.K[0]; _cx = _ref_info.K[2]
+        _fy = _ref_info.K[4]; _cy = _ref_info.K[5]
+        _u = int(_fx * _obj_in_cam.x / _obj_in_cam.z + _cx)
+        _v = int(_fy * _obj_in_cam.y / _obj_in_cam.z + _cy)
+        _h, _w = _ref_color.shape[:2]
+        if 0 <= _u < _w and 0 <= _v < _h:
+            _new_mask = segment_image((_u, _v), _ref_color)
+            _new_grasps, _new_scores = get_all_grasps(_new_mask, _ref_depth, _ref_info)
+            if _new_grasps is not None:
+                _ridx = None
+                for _i, _g in enumerate(_new_grasps):
+                    if (R_cam_base @ _g[:3, 2])[2] > 0.5:
+                        continue
+                    _ridx = _i
+                    break
+                if _ridx is None:
+                    _ridx = 0
+                _rg = _new_grasps[_ridx]
+                _ra = R_cam_base @ _rg[:3, 2]
+                _rp = transform_pypoint(tuple(_rg[:3, 3].tolist()), "camera_color_frame", "base_link")
+                if _rp is not None:
+                    target_position   = _rp
+                    approach_dir_base = _ra
+                    grasp_position = Point3D(
+                        float(_rp.x) + _ra[0] * GRASP_DEPTH_OFFSET_M,
+                        float(_rp.y) + _ra[1] * GRASP_DEPTH_OFFSET_M,
+                        float(_rp.z) + _ra[2] * GRASP_DEPTH_OFFSET_M,
+                    )
+                    print(f'[execute_pick] Refinement updated position: '
+                          f'confidence={_new_scores[_ridx]:.3f}  '
+                          f'approach=[{_ra[0]:.2f},{_ra[1]:.2f},{_ra[2]:.2f}]')
+                else:
+                    print('[execute_pick] Refinement: TF failed, keeping original.')
+            else:
+                print('[execute_pick] Refinement: no grasps found, keeping original.')
+        else:
+            print('[execute_pick] Refinement: projected point out of frame, keeping original.')
+    else:
+        print('[execute_pick] Refinement: skipped (no frame or object behind camera).')
+
+    # Stage 2: advance to grasp position (position-only, keeps current orientation)
+    if not arm_set_position(grasp_position):
+        print('[execute_pick] Stage 2 (advance to grasp) failed — move closer and click again.')
+        _abort_to_start()
+        return
+    print('[execute_pick] Stage 2 reached — gripping.')
+
+    # Stage 3: close gripper — WAIT for the fingers to finish closing on
+    # the object before lifting (grip() is async; the lift starts instantly).
+    grip(1)
+    rospy.sleep(GRIP_CLOSE_WAIT_S)
+
+    # Stage 4: return to starting pose
+    arm_set_position(starting_tool_position)
+    print('[execute_pick] Returned to start')
+
+    _finish_pick()
+    return
 
 
 def frame_cb(_color, _depth, _color_info, _depth_info):
