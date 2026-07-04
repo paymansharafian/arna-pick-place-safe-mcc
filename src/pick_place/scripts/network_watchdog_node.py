@@ -58,7 +58,7 @@ MODE_SEVERITY = {'NOMINAL': 0, 'DEGRADED': 1, 'POOR': 2, 'FAILED': 3}
 # MpcCbfArm.cfg).  Every dynrec write is clamped to these so a large eps_mult
 # (or any stale baseline) can never push a safety margin past its configured
 # ceiling — rather than silently relying on the dynrec server to saturate it.
-EPS_BASE_LIDAR_MAX     = 0.15   # base_mpc_cbf_node/epsilon_base_lidar
+EPS_BASE_LIDAR_MAX     = 0.11   # base_mpc_cbf_node/epsilon_base_lidar
 EPS_BASE_WORKSPACE_MAX = 0.5    # mpc_cbf_arm_node/epsilon_base_workspace
 K_EPS_WORKSPACE_MAX    = 0.05   # mpc_cbf_arm_node/k_epsilon_workspace
 EPS_BASE_SPEED_MAX     = 0.2    # mpc_cbf_arm_node/epsilon_base_speed
