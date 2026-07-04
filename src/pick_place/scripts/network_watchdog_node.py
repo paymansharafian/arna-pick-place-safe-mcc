@@ -54,20 +54,38 @@ DWELL_DOWN_S = 3.0
 # Severity order used to decide transition direction (higher = more severe)
 MODE_SEVERITY = {'NOMINAL': 0, 'DEGRADED': 1, 'POOR': 2, 'FAILED': 3}
 
+# Per-parameter maxima from the dynrec .cfg files (BaseMpcCbfFilter.cfg /
+# MpcCbfArm.cfg).  Every dynrec write is clamped to these so a large eps_mult
+# (or any stale baseline) can never push a safety margin past its configured
+# ceiling — rather than silently relying on the dynrec server to saturate it.
+EPS_BASE_LIDAR_MAX     = 0.15   # base_mpc_cbf_node/epsilon_base_lidar
+EPS_BASE_WORKSPACE_MAX = 0.5    # mpc_cbf_arm_node/epsilon_base_workspace
+K_EPS_WORKSPACE_MAX    = 0.05   # mpc_cbf_arm_node/k_epsilon_workspace
+EPS_BASE_SPEED_MAX     = 0.2    # mpc_cbf_arm_node/epsilon_base_speed
+K_EPS_SPEED_MAX        = 0.01   # mpc_cbf_arm_node/k_epsilon_speed
+
 
 class NetworkWatchdog:
     def __init__(self):
         rospy.init_node('network_watchdog_node', anonymous=False)
 
-        # ── Load baseline epsilon values from param server (written by the
-        #    respective nodes before they create their DynReconfigureServers)
-        self._arm_eps_base_ws  = rospy.get_param('/mpc_cbf_arm_node/epsilon_base_workspace', 0.02)
-        self._arm_k_eps_ws     = rospy.get_param('/mpc_cbf_arm_node/k_epsilon_workspace',    0.001)
-        self._arm_eps_base_sp  = rospy.get_param('/mpc_cbf_arm_node/epsilon_base_speed',     0.02)
-        self._arm_k_eps_sp     = rospy.get_param('/mpc_cbf_arm_node/k_epsilon_speed',        0.0005)
-        self._arm_N_min_base   = rospy.get_param('/mpc_cbf_arm_node/N_min',                  10)
-        self._arm_N_max_base   = rospy.get_param('/mpc_cbf_arm_node/N_max',                  25)
-        self._base_eps_lidar   = rospy.get_param('/base_mpc_cbf_node/epsilon_base_lidar', 0.02)
+        # ── Baseline (NOMINAL) margins that eps_mult is applied to ────────────
+        # These MUST come from a source this node never writes.  Previously they
+        # were read from /<filter_node>/<param> — the very params the watchdog
+        # reconfigures.  Because those values persist on the param server across
+        # node restarts, each watchdog restart re-read an already-multiplied
+        # value as its new baseline and multiplied it again, ratcheting the
+        # margins up to the cfg ceiling (epsilon_base_lidar pinned at 0.09 while
+        # driving).  Reading from private ~*_nominal params (defaulting to the
+        # cfg/YAML nominal values) decouples the baseline from the written value,
+        # so margins always return to nominal when the network recovers.
+        self._arm_eps_base_ws  = rospy.get_param('~arm_epsilon_base_workspace_nominal', 0.02)
+        self._arm_k_eps_ws     = rospy.get_param('~arm_k_epsilon_workspace_nominal',    0.001)
+        self._arm_eps_base_sp  = rospy.get_param('~arm_epsilon_base_speed_nominal',     0.02)
+        self._arm_k_eps_sp     = rospy.get_param('~arm_k_epsilon_speed_nominal',        0.0005)
+        self._arm_N_min_base   = rospy.get_param('~arm_N_min_nominal',                  10)
+        self._arm_N_max_base   = rospy.get_param('~arm_N_max_nominal',                  25)
+        self._base_eps_lidar   = rospy.get_param('~base_epsilon_base_lidar_nominal',    0.02)
 
         self._lock       = threading.Lock()
         self._mode       = 'NOMINAL'
@@ -155,10 +173,10 @@ class NetworkWatchdog:
         arm = self._arm_client()
         if arm is not None:
             arm_cfg = {
-                'epsilon_base_workspace': self._arm_eps_base_ws * mult,
-                'k_epsilon_workspace':    self._arm_k_eps_ws    * mult,
-                'epsilon_base_speed':     self._arm_eps_base_sp * mult,
-                'k_epsilon_speed':        self._arm_k_eps_sp    * mult,
+                'epsilon_base_workspace': min(self._arm_eps_base_ws * mult, EPS_BASE_WORKSPACE_MAX),
+                'k_epsilon_workspace':    min(self._arm_k_eps_ws    * mult, K_EPS_WORKSPACE_MAX),
+                'epsilon_base_speed':     min(self._arm_eps_base_sp * mult, EPS_BASE_SPEED_MAX),
+                'k_epsilon_speed':        min(self._arm_k_eps_sp    * mult, K_EPS_SPEED_MAX),
             }
             if cfg['N_min_override'] is not None:
                 arm_cfg['N_min'] = cfg['N_min_override']
@@ -178,7 +196,7 @@ class NetworkWatchdog:
         base = self._base_client()
         if base is not None:
             base_cfg = {
-                'epsilon_base_lidar': self._base_eps_lidar * mult,
+                'epsilon_base_lidar': min(self._base_eps_lidar * mult, EPS_BASE_LIDAR_MAX),
             }
             try:
                 base.update_configuration(base_cfg)
