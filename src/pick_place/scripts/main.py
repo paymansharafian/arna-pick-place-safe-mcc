@@ -44,6 +44,14 @@ GRASP_MAX_ATTEMPTS = 5
 # lag used to mask this.)  Tunable — increase if the gripper still rises early.
 GRIP_CLOSE_WAIT_S = 1.0
 
+# Vertical lift (metres, base_link +Z) applied right after the grasp, BEFORE
+# returning to the start pose.  The return move is a diagonal from the grasp
+# point back to the viewing pose; without a pure-vertical lift first, the object
+# is dragged sideways across the table and can slip/tip out of the gripper.
+# Lifting straight up first clears the object off the surface, then the diagonal
+# return happens in free space.  Tunable — increase for taller objects/lips.
+GRASP_LIFT_M = 0.08
+
 # output publishers
 image_pub = rospy.Publisher('pick_place_cam', Image, queue_size=1)
 image_compressed_pub = rospy.Publisher('pick_place_cam/compressed', CompressedImage, queue_size=1)
@@ -284,6 +292,17 @@ def execute_pick():
     # the object before lifting (grip() is async; the lift starts instantly).
     grip(1)
     rospy.sleep(GRIP_CLOSE_WAIT_S)
+
+    # Stage 3.5: lift straight up (base_link +Z) before the diagonal return, so
+    # the object clears the table instead of being dragged sideways.  x/y are
+    # held at the grasp point → pure vertical move.  Don't abort on failure: the
+    # object is already grasped, so always proceed to the return.
+    _lift = Point3D(grasp_position.x, grasp_position.y,
+                    float(grasp_position.z) + GRASP_LIFT_M)
+    if arm_set_position(_lift):
+        print('[execute_pick] Stage 3.5: lifted %.0f cm.' % (GRASP_LIFT_M * 100))
+    else:
+        print('[execute_pick] Stage 3.5: lift did not confirm — returning anyway.')
 
     # Stage 4: return to starting pose
     arm_set_position(starting_tool_position)
