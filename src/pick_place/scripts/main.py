@@ -52,6 +52,17 @@ GRIP_CLOSE_WAIT_S = 1.0
 # return happens in free space.  Tunable — increase for taller objects/lips.
 GRASP_LIFT_M = 0.08
 
+# Seconds to wait after commanding the arm HOME on a successful pick, before
+# handing control back.  On success Stage 4 sends the arm to the home joint
+# configuration via arm_home() (same home as the GUI Home button).  Unlike
+# arm_set_position(), arm_home() is fire-and-forget — it returns immediately
+# without waiting for the trajectory.  We must let the home move finish before
+# _finish_pick() clears pick_running, because once the GUI resumes velocity
+# commands any TwistCommand (even zeros) aborts an in-progress ExecuteAction
+# trajectory.  The Gen3 home move takes ~8 s from a table-height pose; the GUI
+# Home button uses 12 s to be safe.  Tunable — increase if home is interrupted.
+HOME_WAIT_S = 12.0
+
 # output publishers
 image_pub = rospy.Publisher('pick_place_cam', Image, queue_size=1)
 image_compressed_pub = rospy.Publisher('pick_place_cam/compressed', CompressedImage, queue_size=1)
@@ -304,9 +315,16 @@ def execute_pick():
     else:
         print('[execute_pick] Stage 3.5: lift did not confirm — returning anyway.')
 
-    # Stage 4: return to starting pose
-    arm_set_position(starting_tool_position)
-    print('[execute_pick] Returned to start')
+    # Stage 4: on success, carry the object to the HOME joint configuration
+    # (same home as the GUI Home button).  We deliberately do NOT return to the
+    # starting viewpoint on success — home is the consistent drop/handoff pose.
+    # (Failed picks still return to start via _abort_to_start so the operator
+    # keeps their camera view for a retry.)  arm_home() is fire-and-forget, so
+    # wait for the trajectory to finish before _finish_pick() re-enables the
+    # GUI velocity stream, which would otherwise abort the home move mid-motion.
+    arm_home()
+    rospy.sleep(HOME_WAIT_S)
+    print('[execute_pick] Homed with object')
 
     _finish_pick()
     return
