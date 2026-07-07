@@ -55,7 +55,6 @@ CATKIN_IGNORE
 
 .catkin_tools/
 method.txt
-methodTEX.tex
 .github/agents/arna-docs.agent.md
 .gitignore
 .github/agents/arna-expert.agent.md
@@ -63,3 +62,4 @@ src/pick_place/scripts/mpc_cbf_base_design.txt
 experiment_design.md
 Temp_exp.md
 Teleop_interface_instruction
+graphify-out
