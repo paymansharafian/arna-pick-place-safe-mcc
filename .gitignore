@@ -63,3 +63,17 @@ experiment_design.md
 Temp_exp.md
 Teleop_interface_instruction
 graphify-out
+# Experiment-2 analysis/data/docs + assistant config — kept local, not published
+exp2_analysis/
+docs/
+exp2_tools/
+experiment.md
+CLAUDE.md
+Exp2_tracking_checklist.tex
+.copilot/
+.claude/
+.github/copilot-instructions.md
+ARNA_overview.html
+Exp2_instruction.md
+PickPlace.tex
+methodTEX.tex
