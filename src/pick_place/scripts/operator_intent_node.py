@@ -216,8 +216,8 @@ def main():
             _last_cmd = last_cmd_time
 
         # Idle reset: no command for idle_timeout_s → fully aligned (no caution).
-        idle = (time.time() - _last_cmd) > _cfg['idle_timeout_s']
-        if _cfg['reset_on_idle'] and idle:
+        idle_reset = _cfg['reset_on_idle'] and (time.time() - _last_cmd) > _cfg['idle_timeout_s']
+        if idle_reset:
             D = 0.0
 
         # Per-subsystem normalized intervention.
@@ -226,8 +226,9 @@ def main():
         d_arm,  cos_arm,  nH_arm  = _subsystem_disagreement(
             _u_H_arm,  _u_R_arm,  _cfg['v_ref_arm'])
 
-        # Excitation guard: no operator command → no disagreement.
-        if max(nH_base, nH_arm) < _cfg['excitation_thresh']:
+        # Excitation guard OR idle reset → no disagreement. D_raw=0 on idle keeps the
+        # EMA from re-inflating the reset out of latched (still non-zero) commands.
+        if idle_reset or max(nH_base, nH_arm) < _cfg['excitation_thresh']:
             D_raw = 0.0
         else:
             if d_base >= d_arm:
