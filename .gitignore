@@ -78,3 +78,5 @@ Exp2_instruction.md
 PickPlace.tex
 methodTEX.tex
 .superpowers/
+src/pick_place/scripts/sub_exp_c_plot.py
+src/pick_place/scripts/sub_exp_c_base.py
